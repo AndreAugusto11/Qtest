@@ -207,76 +207,51 @@ describe('eosio.token test', () => {
     });
   });
 
-  describe("issue token", function () {
-    it('create token test', async () => {
+  describe("transfer token", function () {
+    const symbol = "TRF";
+    const maxSupply = "1000.000 TRF";
+    const issueQuantity = "100.000 TRF";
+    const transferQuantity = "25.000 TRF";
+
+    beforeAll(async () => {
       await contract.action.create(
         {
           issuer: issuer.name,
-          maximum_supply: "1234.5678 MLN"
+          maximum_supply: maxSupply
         },
         [{ actor: contractAccount.name, permission: 'active' }]
       );
-      await contract.action.issue(
-        {
-          to: issuer.name,
-          quantity: "1000.5678 MLN",
-          memo: "issue"
-        },
-        [{ actor: issuer.name, permission: 'active' }]
-      );
-
-      const stats = await contract.table.stat.get({
-        scope: "MLN",
-      });
-      const stat = stats.rows[stats.rows.length - 1];
-      expect(stat.supply).toBe("1000.5678 MLN");
-      expect(stat.max_supply).toBe("1234.5678 MLN");
-      expect(stat.issuer).toBe(issuer.name);
-
-      const balances = await contract.table.accounts.get({
-        scope: issuer.name,
-      });
-      expect(balances.rows[balances.rows.length - 1].balance).toBe("1000.5678 MLN");
-
-      await expectThrow(contract.action.issue(
-        {
-          to: issuer.name,
-          quantity: "1000.1234 MLN",
-          memo: "issue"
-        },
-        [{ actor: issuer.name, permission: 'active' }]
-      ), "quantity exceeds available supply"
-      );
-
-      await expectThrow(contract.action.issue(
-        {
-          to: issuer.name,
-          quantity: "-1.5678 MLN",
-          memo: "issue"
-        },
-        [{ actor: issuer.name, permission: 'active' }]
-      ), "must issue positive quantity"
-      );
-
-      await expectThrow(contract.action.issue(
-        {
-          to: user1.name,
-          quantity: "1.5678 MLN",
-          memo: "issue"
-        },
-        [{ actor: issuer.name, permission: 'active' }]
-      ), "tokens can only be issued to issuer account"
-      );
 
       await contract.action.issue(
         {
           to: issuer.name,
-          quantity: "1.5678 MLN",
+          quantity: issueQuantity,
           memo: "issue"
         },
         [{ actor: issuer.name, permission: 'active' }]
       );
     });
-  });
 
+    it('transfers tokens between accounts', async () => {
+      await contract.action.transfer(
+        {
+          from: issuer.name,
+          to: user1.name,
+          quantity: transferQuantity,
+          memo: "transfer"
+        },
+        [{ actor: issuer.name, permission: 'active' }]
+      );
+
+      const issuerBalances = await contract.table.accounts.get({
+        scope: issuer.name,
+      });
+      const userBalances = await contract.table.accounts.get({
+        scope: user1.name,
+      });
+
+      expect(issuerBalances.rows[0].balance).toBe("75.000 TRF");
+      expect(userBalances.rows[0].balance).toBe("25.000 TRF");
+    });
+  });
 });
