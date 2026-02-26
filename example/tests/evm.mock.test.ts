@@ -21,6 +21,10 @@ describe("Bridge EVM Storage Reading", () => {
 
     }, 60000);
 
+    afterAll(async () => {
+        await chain.clear();
+    }, 10000);
+
     describe(":: Read EVM Requests", () => {
         it("Should read request array length from EVM storage", async () => {
             const bridgeScope = 123; // Mock scope

@@ -18,8 +18,8 @@ function findNotifyTrace(transaction, receiverName) {
 
 describe("Token Transfer Notification Test", () => {
     let chain;
-    let tokenAccount, receiverAccount, testAccount;
-    let tokenContract, receiverContract;
+    let tokenAccount, receiverAccount, testAccount, nftAccount;
+    let tokenContract, receiverContract, nftContract;
 
     beforeAll(async () => {
         // Setup chain
@@ -29,6 +29,7 @@ describe("Token Transfer Notification Test", () => {
         tokenAccount = await chain.system.createAccount("token");
         receiverAccount = await chain.system.createAccount("receiver");
         testAccount = await chain.system.createAccount("testaccount1");
+        nftAccount = await chain.system.createAccount("nfttoken");
         await tokenAccount.addCode('active');
 
         // Deploy token contract
@@ -36,12 +37,20 @@ describe("Token Transfer Notification Test", () => {
             abi: "./build/eosio.token.abi",
             wasm: "./build/eosio.token.wasm",
         });
-        
+
+        // Deploy NFT contract
+        nftContract = await nftAccount.setContract({
+            abi: "./build/mock.atomic.abi",
+            wasm: "./build/mock.atomic.wasm",
+        });
+
         // Deploy receiver contract
         receiverContract = await receiverAccount.setContract({
             abi: "./build/receiver.abi",
             wasm: "./build/receiver.wasm",
         });
+
+        // ERC20 SETUP: Create token and fund test account
         
         // Create token
         await tokenContract.action.create({
@@ -76,10 +85,32 @@ describe("Token Transfer Notification Test", () => {
         console.log("Balance check:", balanceResult.rows);
         expect(balanceResult.rows[0].balance).toContain("500.0000 TLOS");
         
-        // print success message
+
+        // NFT SETUP: Mint an NFT to test account
+        await nftContract.action.mint({
+            to: testAccount.name,
+            asset_id: 1,
+            collection: "coolcol",
+            schema: "schema1",
+            immutable_data: [
+                { key: "name", value: "Cool NFT #1" },
+                { key: "img", value: "QmHash123..." },
+                { key: "rarity", value: "legendary" }
+            ],
+            mutable_data: [
+                { key: "level", value: "1" },
+                { key: "xp", value: "0" }
+            ]
+        }, [{ actor: nftAccount.name, permission: "active" }]);
+        console.log("✓ NFT minted to test account");
+
         console.log("Setup complete: Token and Receiver contracts deployed, test account funded.");
 
     }, 60000);
+
+    afterAll(async () => {
+        await chain.clear();
+    }, 10000);
 
     describe(":: on_notify transfer", () => {
         it("Should trigger on_transfer when tokens sent to receiver", async () => {
@@ -171,7 +202,6 @@ describe("Token Transfer Notification Test", () => {
         // });
 
 
-        
         it("Should receive correct memo", async () => {
             const testMemo = "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb";
             
@@ -186,6 +216,26 @@ describe("Token Transfer Notification Test", () => {
             expect(notifyTrace).not.toBeNull();
             const consoleOutput = notifyTrace.console || "";
             expect(consoleOutput).toContain(testMemo);
+        });
+
+
+        it("Should handle NFT transfer and print correct info", async () => {
+            const testMemo = "0x333333333333333333333333333333333333333333";
+
+            const result = await nftContract.action.transfer({
+                from: testAccount.name,
+                to: receiverAccount.name,
+                asset_ids: [1],
+                memo: testMemo,
+             }, [{ actor: testAccount.name, permission: "active" }]);
+
+             const notifyTrace = findNotifyTrace(result, receiverAccount.name);
+             expect(notifyTrace).not.toBeNull();
+             const consoleOutput = notifyTrace.console || "";
+             expect(consoleOutput).toContain("Asset ID: 1");
+             expect(consoleOutput).toContain("Collection: coolcol");
+             expect(consoleOutput).toContain("Schema: schema1");
+             expect(consoleOutput).toContain(`Memo: ${testMemo}`);
         });
     });
 });
