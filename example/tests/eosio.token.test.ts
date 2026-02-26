@@ -4,7 +4,7 @@ const { expectAction, expectThrow, expectBalance } = require("qtest-js");
 describe('eosio.token test', () => {
   let chain;
   let contract;
-  let chainName = process.env.CHAIN_NAME || 'WAX';
+  let chainName = process.env.CHAIN_NAME || 'TLOS';
   let contractAccount, issuer, user1, user2, user3;
 
   beforeAll(async () => {
