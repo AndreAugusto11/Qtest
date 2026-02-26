@@ -1,6 +1,7 @@
 #pragma once
 #include <eosio/eosio.hpp>
 #include <eosio/crypto.hpp>
+#include <eosio/singleton.hpp>
 #include <optional>
 
 using namespace eosio;
@@ -55,6 +56,18 @@ class [[eosio::contract("mock.evm")]] mockevm : public contract {
         indexed_by<"byaddress"_n, const_mem_fun<account, checksum256, &account::by_address>>,
         indexed_by<"byaccount"_n, const_mem_fun<account, uint64_t, &account::get_account_value>>
     >;
+
+    struct [[eosio::table]] lastcall {
+        name caller;
+        bool estimate;
+        std::optional<checksum160> sender;
+        uint32_t tx_size;
+        std::string tx_prefix;
+
+        EOSLIB_SERIALIZE(lastcall, (caller)(estimate)(sender)(tx_size)(tx_prefix))
+    };
+
+    using lastcall_singleton = eosio::singleton<"lastcall"_n, lastcall>;
 
     [[eosio::action]]
     void setstate(uint64_t scope, checksum256 key, uint128_t value_low, uint128_t value_high);

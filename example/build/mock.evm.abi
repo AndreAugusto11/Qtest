@@ -66,6 +66,32 @@
             ]
         },
         {
+            "name": "lastcall",
+            "base": "",
+            "fields": [
+                {
+                    "name": "caller",
+                    "type": "name"
+                },
+                {
+                    "name": "estimate",
+                    "type": "bool"
+                },
+                {
+                    "name": "sender",
+                    "type": "checksum160?"
+                },
+                {
+                    "name": "tx_size",
+                    "type": "uint32"
+                },
+                {
+                    "name": "tx_prefix",
+                    "type": "string"
+                }
+            ]
+        },
+        {
             "name": "raw",
             "base": "",
             "fields": [
@@ -161,6 +187,13 @@
         {
             "name": "accountstate",
             "type": "account_state",
+            "index_type": "i64",
+            "key_names": [],
+            "key_types": []
+        },
+        {
+            "name": "lastcall",
+            "type": "lastcall",
             "index_type": "i64",
             "key_names": [],
             "key_types": []

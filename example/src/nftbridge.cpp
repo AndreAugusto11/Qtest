@@ -368,7 +368,6 @@ namespace nft_bridge
         
         // Function signature: bridgeTo(address,address,uint256,string)
         // keccak256("bridgeTo(address,address,uint256,string)") = 0x7d056de7... (first 4 bytes)
-        auto fnsig_hash = keccak256(checksum_to_bytes(make_storage_key(0))); // Placeholder, should calculate properly
         vector<uint8_t> fnsig = {0x7d, 0x05, 0x6d, 0xe7}; // Placeholder signature
         data.insert(data.end(), fnsig.begin(), fnsig.end());
 
@@ -435,7 +434,7 @@ namespace nft_bridge
             "raw"_n,
             std::make_tuple(
                 get_self(),
-                vector<uint8_t>{}, // RLP encoded transaction (simplified for now)
+                data,
                 false,
                 std::optional<checksum160>(evm_bridge_account->address)
             )

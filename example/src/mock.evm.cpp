@@ -66,8 +66,20 @@ void mockevm::setaccount(uint64_t index, checksum160 address, name account) {
 [[eosio::action]]
 void mockevm::raw(name caller, std::vector<uint8_t> tx, bool estimate, std::optional<checksum160> sender) {
     require_auth(caller);
-    (void)caller;
-    (void)tx;
-    (void)estimate;
-    (void)sender;
+    static const char* hex = "0123456789abcdef";
+    std::string prefix;
+    const size_t prefix_len = std::min<size_t>(4, tx.size());
+    prefix.reserve(prefix_len * 2);
+    for (size_t i = 0; i < prefix_len; ++i) {
+        prefix.push_back(hex[(tx[i] >> 4) & 0x0F]);
+        prefix.push_back(hex[tx[i] & 0x0F]);
+    }
+    lastcall_singleton last(get_self(), get_self().value);
+    last.set(lastcall{
+        .caller = caller,
+        .estimate = estimate,
+        .sender = sender,
+        .tx_size = static_cast<uint32_t>(tx.size()),
+        .tx_prefix = prefix
+    }, get_self());
 }

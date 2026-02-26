@@ -298,6 +298,27 @@ describe("NFT Bridge - Bridge Function", () => {
 
             expect(assetsTable.rows[0].owner).toBe(bridgeAccount.name);
 
+            const lastcall = await chain.rpc.get_table_rows({
+                json: true,
+                code: evmAccount.name,
+                scope: evmAccount.name,
+                table: "lastcall"
+            });
+
+            expect(lastcall.rows.length).toBe(1);
+            expect(lastcall.rows[0].caller).toBe(bridgeAccount.name);
+            expect(!!lastcall.rows[0].estimate).toBe(false);
+            const senderStr = userAccount.name;
+            const paddedSenderSize = Math.ceil(senderStr.length / 32) * 32;
+
+            // Expected tx size calculation:
+            // 4 bytes for function signature
+            // 32 bytes for each of the 4 parameters (address to, address from, uint256 tokenId, string tokenURI)
+            // + size of the string parameter (padded to 32 bytes)
+            const expectedTxSize = 4 + (32 * 4) + 32 + paddedSenderSize;
+            expect(lastcall.rows[0].tx_size).toBe(expectedTxSize);
+            expect(lastcall.rows[0].tx_prefix).toBe("7d056de7");
+
             console.log("✓ NFT successfully bridged to EVM");
         });
 
