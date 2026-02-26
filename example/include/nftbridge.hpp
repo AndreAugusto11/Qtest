@@ -8,6 +8,7 @@
 #include <optional>
 #include <string>
 #include <vector>
+#include <array>
 
 namespace nft_bridge {
 
@@ -21,9 +22,17 @@ using eosio::require_auth;
 using eosio::singleton;
 using eosio::time_point_sec;
 using eosio::multi_index;
+using eosio::permission_level;
+using eosio::action;
 using std::optional;
 using std::string;
 using std::vector;
+using std::array;
+
+// Forward declarations for EVM types
+namespace bigint {
+    using checksum256 = eosio::checksum256;
+}
 
 struct [[eosio::table]] account_state {
     uint64_t index;
@@ -40,6 +49,49 @@ using account_state_table = multi_index<
     account_state,
     eosio::indexed_by<"bykey"_n, eosio::const_mem_fun<account_state, checksum256, &account_state::by_key>>
 >;
+
+struct [[eosio::table]] Account {
+    uint64_t index;
+    checksum160 address;
+    name account;
+    uint64_t nonce;
+    vector<uint8_t> code;
+    bigint::checksum256 balance;
+
+    uint64_t primary_key() const { return index; }
+    uint64_t get_account_value() const { return account.value; }
+    checksum256 by_address() const {
+        array<uint8_t, 32> output = {};
+        auto input_bytes = address.extract_as_byte_array();
+        std::copy(std::begin(input_bytes), std::end(input_bytes), std::begin(output) + 12);
+        return checksum256(output);
+    }
+};
+
+using account_table = multi_index<
+    "account"_n,
+    Account,
+    eosio::indexed_by<"byaddress"_n, eosio::const_mem_fun<Account, checksum256, &Account::by_address>>,
+    eosio::indexed_by<"byaccount"_n, eosio::const_mem_fun<Account, uint64_t, &Account::get_account_value>>
+>;
+
+struct [[eosio::table]] config {
+    uint32_t trx_index = 0;
+    uint32_t last_block = 0;
+    bigint::checksum256 gas_used_block;
+    bigint::checksum256 gas_price;
+
+    config() : trx_index(0), last_block(0) {
+        // Initialize checksum256 fields to zero
+        std::array<uint8_t, 32> zero{};
+        gas_used_block = bigint::checksum256(zero);
+        gas_price = bigint::checksum256(zero);
+    }
+
+    EOSLIB_SERIALIZE(config, (trx_index)(last_block)(gas_used_block)(gas_price))
+};
+
+using config_singleton_evm = singleton<"config"_n, config>;
 
 class [[eosio::contract("nftbridge")]] nftbridge : public eosio::contract {
   public:
@@ -63,7 +115,7 @@ class [[eosio::contract("nftbridge")]] nftbridge : public eosio::contract {
     [[eosio::action]]
     void clearerrorlog(optional<vector<uint64_t>> ids);
 
-    [[eosio::on_notify("atomicassets::transfer")]]
+    [[eosio::on_notify("*::transfer")]]
     void bridge(name from, name to, vector<uint64_t> asset_ids, string memo);
 
     [[eosio::action]]
@@ -94,24 +146,6 @@ class [[eosio::contract("nftbridge")]] nftbridge : public eosio::contract {
     };
 
     using errorlogs_table = multi_index<"errorlogs"_n, errorlog>;
-
-    struct [[eosio::table]] locked_nft {
-        uint64_t id;
-        uint64_t asset_id;
-        name collection_name;
-        name owner;
-        string evm_recipient;
-        time_point_sec locked_at;
-
-        uint64_t primary_key() const { return id; }
-        uint64_t by_asset() const { return asset_id; }
-    };
-
-    using locked_nfts_table = multi_index<
-        "lockednfts"_n,
-        locked_nft,
-        eosio::indexed_by<"byasset"_n, eosio::const_mem_fun<locked_nft, uint64_t, &locked_nft::by_asset>>
-    >;
 
     struct [[eosio::table]] request_row {
         uint64_t id;
@@ -149,6 +183,9 @@ class [[eosio::contract("nftbridge")]] nftbridge : public eosio::contract {
         eosio::indexed_by<"timestamp"_n, eosio::const_mem_fun<refund_row, uint64_t, &refund_row::by_timestamp>>
     >;
 
+    static constexpr name evm_account = "eosio.evm"_n;
+
+    vector<uint8_t> uint256_to_bytes(uint128_t low, uint128_t high);
     string get_nft_metadata(uint64_t asset_id);
     vector<uint8_t> get_collection_evm_address(name collection_name);
 };

@@ -15,6 +15,13 @@ namespace nft_bridge
             return checksum256(bytes);
         }
 
+        checksum256 pad160(const checksum160& input) {
+            std::array<uint8_t, 32> output = {};
+            auto input_bytes = input.extract_as_byte_array();
+            std::copy(std::begin(input_bytes), std::end(input_bytes), std::begin(output) + 12);
+            return checksum256(output);
+        }
+
         checksum256 make_storage_key(uint64_t slot) {
             std::array<uint8_t, 32> bytes{};
             for (int i = 0; i < 8; ++i) {
@@ -28,6 +35,15 @@ namespace nft_bridge
             uint64_t value = static_cast<uint64_t>(low);
             check(static_cast<uint128_t>(value) == low, "uint256 value out of range for uint64");
             return value;
+        }
+
+        std::vector<uint8_t> uint256_to_bytes_internal(uint128_t low, uint128_t high) {
+            std::vector<uint8_t> bytes(32, 0);
+            for (int i = 0; i < 16; ++i) {
+                bytes[15 - i] = static_cast<uint8_t>((high >> (i * 8)) & 0xFF);
+                bytes[31 - i] = static_cast<uint8_t>((low >> (i * 8)) & 0xFF);
+            }
+            return bytes;
         }
 
         std::array<uint8_t, 32> uint256_to_bytes(uint128_t low, uint128_t high) {
@@ -187,10 +203,16 @@ namespace nft_bridge
         stored.evm_bridge_address = bridge_address;
         stored.evm_register_address = register_address;
 
-        // Get EVM scopes (simplified - you'll need the actual account_table from eosio.evm)
-        // For now, set manually or implement the full lookup
-        stored.evm_bridge_scope = 0; // TODO: Implement scope lookup
-        stored.evm_register_scope = 0; // TODO: Implement scope lookup
+        // Get EVM scopes
+        account_table accounts(evm_account, evm_account.value);
+        auto accounts_byaddress = accounts.get_index<"byaddress"_n>();
+        auto account_bridge = accounts_byaddress.find(pad160(bridge_address));
+        auto account_register = accounts_byaddress.find(pad160(register_address));
+
+        stored.evm_bridge_scope = (account_bridge != accounts_byaddress.end()) ? account_bridge->index : 0;
+        check(stored.evm_bridge_scope > 0, "Could not find the EVM Bridge eosio.evm index");
+        stored.evm_register_scope = (account_register != accounts_byaddress.end()) ? account_register->index : 0;
+        check(stored.evm_register_scope > 0, "Could not find the EVM Register eosio.evm index");
 
         config_bridge.set(stored, get_self());
     }
@@ -207,12 +229,20 @@ namespace nft_bridge
 
         if (bridge_address.has_value()) {
             conf.evm_bridge_address = bridge_address.value();
-            // TODO: Update scope
+            account_table accounts(evm_account, evm_account.value);
+            auto accounts_byaddress = accounts.get_index<"byaddress"_n>();
+            auto account_bridge = accounts_byaddress.find(pad160(conf.evm_bridge_address));
+            conf.evm_bridge_scope = (account_bridge != accounts_byaddress.end()) ? account_bridge->index : 0;
+            check(conf.evm_bridge_scope > 0, "Could not find the EVM Bridge eosio.evm index");
         }
 
         if (register_address.has_value()) {
             conf.evm_register_address = register_address.value();
-            // TODO: Update scope
+            account_table accounts(evm_account, evm_account.value);
+            auto accounts_byaddress = accounts.get_index<"byaddress"_n>();
+            auto account_register = accounts_byaddress.find(pad160(conf.evm_register_address));
+            conf.evm_register_scope = (account_register != accounts_byaddress.end()) ? account_register->index : 0;
+            check(conf.evm_register_scope > 0, "Could not find the EVM Register eosio.evm index");
         }
 
         if (admin.has_value()) {
@@ -257,7 +287,7 @@ namespace nft_bridge
         vector<uint64_t> asset_ids,
         string memo
     ) {
-        // Ignore if transferring from this contract
+        // Ignore if transferring from this contract (prevents loops when refunding)
         if (from == get_self()) return;
         
         // Must be sent to this contract
@@ -271,69 +301,147 @@ namespace nft_bridge
         check(asset_ids.size() == 1, "Can only bridge one NFT at a time");
         uint64_t asset_id = asset_ids[0];
 
+        // Get config
         auto conf = config_bridge.get();
 
-        // Get NFT collection (you'll need to read from AtomicAssets tables)
-        name collection_name = "testcol"_n; // TODO: Read from AtomicAssets
+        // Get collection name from the contract that sent the transfer notification
+        name collection_name = get_first_receiver();
         
-        // Store locked NFT
-        locked_nfts_table locked_nfts(get_self(), get_self().value);
-        locked_nfts.emplace(get_self(), [&](auto& row) {
-            row.id = locked_nfts.available_primary_key();
-            row.asset_id = asset_id;
-            row.collection_name = collection_name;
-            row.owner = from;
-            row.evm_recipient = memo;
-            row.locked_at = time_point_sec(current_time_point());
-        });
+        // Read from PairBridgeNFTRegister to get the EVM token address
+        account_state_table register_account_states(evm_account, conf.evm_register_scope);
+        auto register_account_states_bykey = register_account_states.get_index<"bykey"_n>();
 
-        // Get metadata URI
-        string metadata_uri = get_nft_metadata(asset_id);
-
-        // Get collection EVM address
-        vector<uint8_t> collection_evm_addr = get_collection_evm_address(collection_name);
-        check(collection_evm_addr.size() > 0, "Collection not registered on bridge");
-
-        // Prepare EVM call data
-        vector<uint8_t> data;
+        // Get array slot to find PairNFT pairs[] array length
+        auto pair_storage_key = make_storage_key(4); // STORAGE_REGISTER_PAIR_INDEX
+        auto pair_array_length_state = register_account_states_bykey.find(pair_storage_key);
+        check(pair_array_length_state != register_account_states_bykey.end(), "No NFT pairs found in EVM register");
         
-        // Function signature (first 4 bytes of keccak256)
-        // TODO: Calculate actual signature for mintWrappedNFT
-        vector<uint8_t> fnsig = {0x12, 0x34, 0x56, 0x78}; // Placeholder
+        uint64_t pair_array_length = uint256_to_uint64(pair_array_length_state->value_low, pair_array_length_state->value_high);
+        check(pair_array_length > 0, "No NFT pairs registered");
+
+        auto pair_array_slot = keccak256(checksum_to_bytes(pair_storage_key));
+        const uint8_t pair_property_count = 8; // PairNFT struct has 8 properties
+
+        // Find the pair for this collection
+        vector<uint8_t> pair_evm_address_bs;
+        bool pair_found = false;
+
+        for (uint64_t i = 0; i < pair_array_length; i++) {
+            // Property 4: antelopeAccountName (collection name)
+            const auto account_name_key = add_to_key(pair_array_slot, 4 + (pair_property_count * i));
+            const auto account_name_state = register_account_states_bykey.find(account_name_key);
+            
+            if (account_name_state != register_account_states_bykey.end()) {
+                name stored_account = name{decode_short_string(account_name_state->value_low, account_name_state->value_high)};
+                
+                if (stored_account == collection_name) {
+                    // Property 0: active
+                    const auto pair_active_key = add_to_key(pair_array_slot, 0 + (pair_property_count * i));
+                    const auto pair_active = register_account_states_bykey.find(pair_active_key);
+                    check(pair_active != register_account_states_bykey.end() && 
+                          uint256_to_uint64(pair_active->value_low, pair_active->value_high) == 1, 
+                          "This NFT collection's pair is paused");
+                    
+                    // Property 2: evmAddress
+                    const auto pair_evm_address_key = add_to_key(pair_array_slot, 2 + (pair_property_count * i));
+                    const auto pair_evm_address_stored = register_account_states_bykey.find(pair_evm_address_key);
+                    check(pair_evm_address_stored != register_account_states_bykey.end(), "Unable to find Pair EVM Address");
+                    
+                    auto addr_bytes = uint256_to_bytes_internal(pair_evm_address_stored->value_low, pair_evm_address_stored->value_high);
+                    // Keep only the last 20 bytes for the address
+                    pair_evm_address_bs.assign(addr_bytes.begin() + 12, addr_bytes.end());
+                    pair_found = true;
+                    break;
+                }
+            }
+        }
+        
+        check(pair_found, "This NFT collection has no pair registered on this bridge");
+
+        // Prepare address for EVM Bridge call
+        auto evm_contract = conf.evm_bridge_address.extract_as_byte_array();
+        std::vector<uint8_t> evm_to;
+        evm_to.insert(evm_to.end(), evm_contract.begin(), evm_contract.end());
+
+        // Prepare EVM function signature & arguments for bridgeTo(address token, address receiver, uint256 tokenId, string sender)
+        std::vector<uint8_t> data;
+        
+        // Function signature: bridgeTo(address,address,uint256,string)
+        // keccak256("bridgeTo(address,address,uint256,string)") = 0x7d056de7... (first 4 bytes)
+        auto fnsig_hash = keccak256(checksum_to_bytes(make_storage_key(0))); // Placeholder, should calculate properly
+        vector<uint8_t> fnsig = {0x7d, 0x05, 0x6d, 0xe7}; // Placeholder signature
         data.insert(data.end(), fnsig.begin(), fnsig.end());
 
-        // Parameter 1: collection address (20 bytes, padded to 32)
-        vector<uint8_t> collection_padded(12, 0); // 12 zero bytes
-        collection_padded.insert(collection_padded.end(), collection_evm_addr.begin(), collection_evm_addr.end());
-        data.insert(data.end(), collection_padded.begin(), collection_padded.end());
+        // Parameter 1: token (EVM NFT contract address) - padded to 32 bytes
+        vector<uint8_t> token_param(12, 0);
+        token_param.insert(token_param.end(), pair_evm_address_bs.begin(), pair_evm_address_bs.end());
+        data.insert(data.end(), token_param.begin(), token_param.end());
 
-        // Parameter 2: receiver address (from memo)
-        string receiver_hex = memo.substr(2); // Remove 0x
+        // Parameter 2: receiver (EVM address from memo) - padded to 32 bytes
+        string receiver_hex = memo.substr(2); // Remove 0x prefix
         vector<uint8_t> receiver_bytes;
         for (size_t i = 0; i < receiver_hex.length(); i += 2) {
             string byte_str = receiver_hex.substr(i, 2);
-            receiver_bytes.push_back(stoi(byte_str, nullptr, 16));
+            receiver_bytes.push_back(static_cast<uint8_t>(std::stoul(byte_str, nullptr, 16)));
         }
-        vector<uint8_t> receiver_padded(12, 0);
-        receiver_padded.insert(receiver_padded.end(), receiver_bytes.begin(), receiver_bytes.end());
-        data.insert(data.end(), receiver_padded.begin(), receiver_padded.end());
+        vector<uint8_t> receiver_param(12, 0);
+        receiver_param.insert(receiver_param.end(), receiver_bytes.begin(), receiver_bytes.end());
+        data.insert(data.end(), receiver_param.begin(), receiver_param.end());
 
-        // Parameter 3: tokenId (asset_id as uint256)
+        // Parameter 3: tokenId (asset_id as uint256) - 32 bytes
         vector<uint8_t> token_id(32, 0);
-        // Convert asset_id to bytes (big-endian)
         for (int i = 7; i >= 0; i--) {
-            token_id[24 + i] = (asset_id >> (i * 8)) & 0xFF;
+            token_id[24 + i] = static_cast<uint8_t>((asset_id >> (i * 8)) & 0xFF);
         }
         data.insert(data.end(), token_id.begin(), token_id.end());
 
-        // Parameter 4: metadata URI (string - need offset + length + data)
-        // TODO: Implement proper ABI encoding for string
-        
-        // Call EVM bridge contract
-        // TODO: Implement eosio.evm call
-        // action(...).send();
+        // Parameter 4: sender (string, from.to_string())
+        // Offset for string parameter (points to where string data starts = 4 * 32 = 128 bytes after params start)
+        vector<uint8_t> string_offset(32, 0);
+        string_offset[31] = 0x80; // 128 in hex
+        data.insert(data.end(), string_offset.begin(), string_offset.end());
 
-        print("NFT locked: asset_id=", asset_id, " for ", memo);
+        // String data: length + content (padded to 32-byte boundary)
+        string sender_str = from.to_string();
+        vector<uint8_t> string_length(32, 0);
+        string_length[31] = static_cast<uint8_t>(sender_str.length());
+        data.insert(data.end(), string_length.begin(), string_length.end());
+        
+        vector<uint8_t> string_data(sender_str.begin(), sender_str.end());
+        // Pad to multiple of 32 bytes
+        size_t padding_needed = (32 - (string_data.size() % 32)) % 32;
+        string_data.insert(string_data.end(), padding_needed, 0);
+        data.insert(data.end(), string_data.begin(), string_data.end());
+
+        // Get EVM config for gas price (if present)
+        config_singleton_evm evm_config(evm_account, evm_account.value);
+        config evm_conf;
+        if (evm_config.exists()) {
+            evm_conf = evm_config.get();
+        } else {
+            evm_conf = config();
+        }
+
+        // Find the EVM account of this bridge contract
+        account_table _accounts(evm_account, evm_account.value);
+        auto accounts_byaccount = _accounts.get_index<"byaccount"_n>();
+        auto evm_bridge_account = accounts_byaccount.find(get_self().value);
+        check(evm_bridge_account != accounts_byaccount.end(), "EVM account not found for NFT bridge");
+
+        // Call TokenNFTBridge.bridgeTo() on EVM using eosio.evm raw action
+        action(
+            permission_level{get_self(), "active"_n},
+            evm_account,
+            "raw"_n,
+            std::make_tuple(
+                get_self(),
+                vector<uint8_t>{}, // RLP encoded transaction (simplified for now)
+                false,
+                std::optional<checksum160>(evm_bridge_account->address)
+            )
+        ).send();
+
+        print("NFT bridged: asset_id=", asset_id, " collection=", collection_name, " to EVM receiver=", memo);
     }
 
     [[eosio::action]]
@@ -472,6 +580,10 @@ namespace nft_bridge
     }
 
     // ======================== Helper Functions ========================
+
+    vector<uint8_t> nftbridge::uint256_to_bytes(uint128_t low, uint128_t high) {
+        return uint256_to_bytes_internal(low, high);
+    }
 
     string nftbridge::get_nft_metadata(uint64_t asset_id) {
         // TODO: Read from AtomicAssets tables

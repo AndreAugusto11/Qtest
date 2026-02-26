@@ -4,6 +4,36 @@
     "types": [],
     "structs": [
         {
+            "name": "account",
+            "base": "",
+            "fields": [
+                {
+                    "name": "index",
+                    "type": "uint64"
+                },
+                {
+                    "name": "address",
+                    "type": "checksum160"
+                },
+                {
+                    "name": "account",
+                    "type": "name"
+                },
+                {
+                    "name": "nonce",
+                    "type": "uint64"
+                },
+                {
+                    "name": "code",
+                    "type": "bytes"
+                },
+                {
+                    "name": "balance",
+                    "type": "checksum256"
+                }
+            ]
+        },
+        {
             "name": "account_state",
             "base": "",
             "fields": [
@@ -32,6 +62,46 @@
                 {
                     "name": "scope",
                     "type": "uint64"
+                }
+            ]
+        },
+        {
+            "name": "raw",
+            "base": "",
+            "fields": [
+                {
+                    "name": "caller",
+                    "type": "name"
+                },
+                {
+                    "name": "tx",
+                    "type": "bytes"
+                },
+                {
+                    "name": "estimate",
+                    "type": "bool"
+                },
+                {
+                    "name": "sender",
+                    "type": "checksum160?"
+                }
+            ]
+        },
+        {
+            "name": "setaccount",
+            "base": "",
+            "fields": [
+                {
+                    "name": "index",
+                    "type": "uint64"
+                },
+                {
+                    "name": "address",
+                    "type": "checksum160"
+                },
+                {
+                    "name": "account",
+                    "type": "name"
                 }
             ]
         },
@@ -65,12 +135,29 @@
             "ricardian_contract": ""
         },
         {
+            "name": "raw",
+            "type": "raw",
+            "ricardian_contract": ""
+        },
+        {
+            "name": "setaccount",
+            "type": "setaccount",
+            "ricardian_contract": ""
+        },
+        {
             "name": "setstate",
             "type": "setstate",
             "ricardian_contract": ""
         }
     ],
     "tables": [
+        {
+            "name": "account",
+            "type": "account",
+            "index_type": "i64",
+            "key_names": [],
+            "key_types": []
+        },
         {
             "name": "accountstate",
             "type": "account_state",

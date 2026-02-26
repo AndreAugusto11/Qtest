@@ -89,36 +89,6 @@
             ]
         },
         {
-            "name": "locked_nft",
-            "base": "",
-            "fields": [
-                {
-                    "name": "id",
-                    "type": "uint64"
-                },
-                {
-                    "name": "asset_id",
-                    "type": "uint64"
-                },
-                {
-                    "name": "collection_name",
-                    "type": "name"
-                },
-                {
-                    "name": "owner",
-                    "type": "name"
-                },
-                {
-                    "name": "evm_recipient",
-                    "type": "string"
-                },
-                {
-                    "name": "locked_at",
-                    "type": "time_point_sec"
-                }
-            ]
-        },
-        {
             "name": "modifyconfig",
             "base": "",
             "fields": [
@@ -249,13 +219,6 @@
         {
             "name": "errorlogs",
             "type": "errorlog",
-            "index_type": "i64",
-            "key_names": [],
-            "key_types": []
-        },
-        {
-            "name": "lockednfts",
-            "type": "locked_nft",
             "index_type": "i64",
             "key_names": [],
             "key_types": []
