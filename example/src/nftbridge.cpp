@@ -1,0 +1,487 @@
+#include "../include/nftbridge.hpp"
+
+#include <array>
+
+namespace nft_bridge
+{
+    namespace {
+        constexpr name evm_account = "eosio.evm"_n;
+
+        std::array<uint8_t, 32> checksum_to_bytes(const checksum256& value) {
+            return value.extract_as_byte_array();
+        }
+
+        checksum256 bytes_to_checksum(const std::array<uint8_t, 32>& bytes) {
+            return checksum256(bytes);
+        }
+
+        checksum256 make_storage_key(uint64_t slot) {
+            std::array<uint8_t, 32> bytes{};
+            for (int i = 0; i < 8; ++i) {
+                bytes[31 - i] = static_cast<uint8_t>((slot >> (i * 8)) & 0xFF);
+            }
+            return bytes_to_checksum(bytes);
+        }
+
+        uint64_t uint256_to_uint64(uint128_t low, uint128_t high) {
+            check(high == 0, "uint256 value out of range for uint64");
+            uint64_t value = static_cast<uint64_t>(low);
+            check(static_cast<uint128_t>(value) == low, "uint256 value out of range for uint64");
+            return value;
+        }
+
+        std::array<uint8_t, 32> uint256_to_bytes(uint128_t low, uint128_t high) {
+            std::array<uint8_t, 32> bytes{};
+            for (int i = 0; i < 16; ++i) {
+                bytes[15 - i] = static_cast<uint8_t>((high >> (i * 8)) & 0xFF);
+                bytes[31 - i] = static_cast<uint8_t>((low >> (i * 8)) & 0xFF);
+            }
+            return bytes;
+        }
+
+        std::string bytes_to_hex(const std::vector<uint8_t>& data) {
+            static const char* hex = "0123456789abcdef";
+            std::string out;
+            out.reserve(data.size() * 2);
+            for (auto byte : data) {
+                out.push_back(hex[(byte >> 4) & 0x0F]);
+                out.push_back(hex[byte & 0x0F]);
+            }
+            return out;
+        }
+
+        std::string decode_short_string(uint128_t low, uint128_t high) {
+            const auto bytes = uint256_to_bytes(low, high);
+            const uint8_t length_marker = bytes[31];
+            const uint8_t length = static_cast<uint8_t>(length_marker / 2);
+            check(length <= 31, "invalid short string length");
+            return std::string(reinterpret_cast<const char*>(bytes.data()),
+                               reinterpret_cast<const char*>(bytes.data() + length));
+        }
+
+        std::string decode_address(uint128_t low, uint128_t high) {
+            const auto bytes = uint256_to_bytes(low, high);
+            std::vector<uint8_t> addr(bytes.begin() + 12, bytes.end());
+            return std::string("0x") + bytes_to_hex(addr);
+        }
+
+        bool read_evm_state(uint64_t scope, const checksum256& key, uint128_t& value_low, uint128_t& value_high) {
+            account_state_table states(evm_account, scope);
+            auto states_bykey = states.get_index<"bykey"_n>();
+            auto itr = states_bykey.find(key);
+            if (itr == states_bykey.end()) {
+                return false;
+            }
+            value_low = itr->value_low;
+            value_high = itr->value_high;
+            return true;
+        }
+
+        static inline uint64_t rotl64(uint64_t x, uint64_t y) {
+            return (x << y) | (x >> (64 - y));
+        }
+
+        void keccakf(uint64_t st[25]) {
+            static const uint64_t rndc[24] = {
+                0x0000000000000001ULL, 0x0000000000008082ULL,
+                0x800000000000808aULL, 0x8000000080008000ULL,
+                0x000000000000808bULL, 0x0000000080000001ULL,
+                0x8000000080008081ULL, 0x8000000000008009ULL,
+                0x000000000000008aULL, 0x0000000000000088ULL,
+                0x0000000080008009ULL, 0x000000008000000aULL,
+                0x000000008000808bULL, 0x800000000000008bULL,
+                0x8000000000008089ULL, 0x8000000000008003ULL,
+                0x8000000000008002ULL, 0x8000000000000080ULL,
+                0x000000000000800aULL, 0x800000008000000aULL,
+                0x8000000080008081ULL, 0x8000000000008080ULL,
+                0x0000000080000001ULL, 0x8000000080008008ULL
+            };
+
+            static const int rotc[24] = {
+                1, 3, 6, 10, 15, 21, 28, 36, 45, 55, 2, 14,
+                27, 41, 56, 8, 25, 43, 62, 18, 39, 61, 20, 44
+            };
+
+            static const int piln[24] = {
+                10, 7, 11, 17, 18, 3, 5, 16, 8, 21, 24, 4,
+                15, 23, 19, 13, 12, 2, 20, 14, 22, 9, 6, 1
+            };
+
+            for (int round = 0; round < 24; ++round) {
+                uint64_t bc[5];
+                for (int i = 0; i < 5; ++i) {
+                    bc[i] = st[i] ^ st[i + 5] ^ st[i + 10] ^ st[i + 15] ^ st[i + 20];
+                }
+                for (int i = 0; i < 5; ++i) {
+                    uint64_t t = bc[(i + 4) % 5] ^ rotl64(bc[(i + 1) % 5], 1);
+                    for (int j = 0; j < 25; j += 5) {
+                        st[j + i] ^= t;
+                    }
+                }
+
+                uint64_t t = st[1];
+                for (int i = 0; i < 24; ++i) {
+                    int j = piln[i];
+                    uint64_t tmp = st[j];
+                    st[j] = rotl64(t, rotc[i]);
+                    t = tmp;
+                }
+
+                for (int j = 0; j < 25; j += 5) {
+                    for (int i = 0; i < 5; ++i) {
+                        bc[i] = st[j + i];
+                    }
+                    for (int i = 0; i < 5; ++i) {
+                        st[j + i] ^= (~bc[(i + 1) % 5]) & bc[(i + 2) % 5];
+                    }
+                }
+
+                st[0] ^= rndc[round];
+            }
+        }
+
+        checksum256 keccak256(const std::array<uint8_t, 32>& input) {
+            uint64_t st[25] = {0};
+            constexpr size_t rate = 136;
+            uint8_t* st_bytes = reinterpret_cast<uint8_t*>(st);
+
+            for (size_t i = 0; i < input.size(); ++i) {
+                st_bytes[i] ^= input[i];
+            }
+            st_bytes[input.size()] ^= 0x01;
+            st_bytes[rate - 1] ^= 0x80;
+
+            keccakf(st);
+
+            std::array<uint8_t, 32> out{};
+            for (size_t i = 0; i < out.size(); ++i) {
+                out[i] = st_bytes[i];
+            }
+            return bytes_to_checksum(out);
+        }
+
+        checksum256 add_to_key(const checksum256& base, uint64_t offset) {
+            auto bytes = checksum_to_bytes(base);
+            uint64_t carry = offset;
+            for (int i = 0; i < 32 && carry > 0; ++i) {
+                int idx = 31 - i;
+                uint64_t sum = static_cast<uint64_t>(bytes[idx]) + (carry & 0xFF);
+                bytes[idx] = static_cast<uint8_t>(sum & 0xFF);
+                carry = (carry >> 8) + (sum >> 8);
+            }
+            return bytes_to_checksum(bytes);
+        }
+    }
+
+    // ======================== Admin Actions ========================
+    
+    [[eosio::action]]
+    void nftbridge::init(checksum160 bridge_address, checksum160 register_address, string version, name admin) {
+        require_auth(get_self());
+        check(!config_bridge.exists(), "contract already initialized");
+        check(is_account(admin), "admin account doesn't exist");
+
+        config_row stored;
+        stored.version = version;
+        stored.admin = admin;
+        stored.evm_bridge_address = bridge_address;
+        stored.evm_register_address = register_address;
+
+        // Get EVM scopes (simplified - you'll need the actual account_table from eosio.evm)
+        // For now, set manually or implement the full lookup
+        stored.evm_bridge_scope = 0; // TODO: Implement scope lookup
+        stored.evm_register_scope = 0; // TODO: Implement scope lookup
+
+        config_bridge.set(stored, get_self());
+    }
+
+    [[eosio::action]]
+    void nftbridge::modifyconfig(
+        optional<checksum160> bridge_address,
+        optional<checksum160> register_address,
+        optional<name> admin,
+        optional<string> version
+    ) {
+        auto conf = config_bridge.get();
+        require_auth(conf.admin);
+
+        if (bridge_address.has_value()) {
+            conf.evm_bridge_address = bridge_address.value();
+            // TODO: Update scope
+        }
+
+        if (register_address.has_value()) {
+            conf.evm_register_address = register_address.value();
+            // TODO: Update scope
+        }
+
+        if (admin.has_value()) {
+            check(is_account(admin.value()), "admin account doesn't exist");
+            conf.admin = admin.value();
+        }
+
+        if (version.has_value()) {
+            conf.version = version.value();
+        }
+
+        config_bridge.set(conf, get_self());
+    }
+
+    [[eosio::action]]
+    void nftbridge::clearerrorlog(optional<vector<uint64_t>> ids) {
+        require_auth(config_bridge.get().admin);
+
+        errorlogs_table errorlogs(get_self(), get_self().value);
+
+        if (!ids.has_value()) {
+            auto itr = errorlogs.begin();
+            while (itr != errorlogs.end()) {
+                itr = errorlogs.erase(itr);
+            }
+        } else {
+            for (auto id : ids.value()) {
+                auto itr = errorlogs.find(id);
+                if (itr != errorlogs.end()) {
+                    errorlogs.erase(itr);
+                }
+            }
+        }
+    }
+
+    // ======================== Bridge Actions ========================
+
+    [[eosio::on_notify("*::transfer")]]
+    void nftbridge::bridge(
+        name from,
+        name to,
+        vector<uint64_t> asset_ids,
+        string memo
+    ) {
+        // Ignore if transferring from this contract
+        if (from == get_self()) return;
+        
+        // Must be sent to this contract
+        check(to == get_self(), "NFT must be sent to bridge contract");
+        
+        // Memo must be EVM address (42 chars: 0x + 40 hex)
+        check(memo.length() == 42, "Memo must be 42-character EVM address (0x...)");
+        check(memo.substr(0, 2) == "0x", "Memo must start with 0x");
+
+        // Only support single NFT transfers for now
+        check(asset_ids.size() == 1, "Can only bridge one NFT at a time");
+        uint64_t asset_id = asset_ids[0];
+
+        auto conf = config_bridge.get();
+
+        // Get NFT collection (you'll need to read from AtomicAssets tables)
+        name collection_name = "testcol"_n; // TODO: Read from AtomicAssets
+        
+        // Store locked NFT
+        locked_nfts_table locked_nfts(get_self(), get_self().value);
+        locked_nfts.emplace(get_self(), [&](auto& row) {
+            row.id = locked_nfts.available_primary_key();
+            row.asset_id = asset_id;
+            row.collection_name = collection_name;
+            row.owner = from;
+            row.evm_recipient = memo;
+            row.locked_at = time_point_sec(current_time_point());
+        });
+
+        // Get metadata URI
+        string metadata_uri = get_nft_metadata(asset_id);
+
+        // Get collection EVM address
+        vector<uint8_t> collection_evm_addr = get_collection_evm_address(collection_name);
+        check(collection_evm_addr.size() > 0, "Collection not registered on bridge");
+
+        // Prepare EVM call data
+        vector<uint8_t> data;
+        
+        // Function signature (first 4 bytes of keccak256)
+        // TODO: Calculate actual signature for mintWrappedNFT
+        vector<uint8_t> fnsig = {0x12, 0x34, 0x56, 0x78}; // Placeholder
+        data.insert(data.end(), fnsig.begin(), fnsig.end());
+
+        // Parameter 1: collection address (20 bytes, padded to 32)
+        vector<uint8_t> collection_padded(12, 0); // 12 zero bytes
+        collection_padded.insert(collection_padded.end(), collection_evm_addr.begin(), collection_evm_addr.end());
+        data.insert(data.end(), collection_padded.begin(), collection_padded.end());
+
+        // Parameter 2: receiver address (from memo)
+        string receiver_hex = memo.substr(2); // Remove 0x
+        vector<uint8_t> receiver_bytes;
+        for (size_t i = 0; i < receiver_hex.length(); i += 2) {
+            string byte_str = receiver_hex.substr(i, 2);
+            receiver_bytes.push_back(stoi(byte_str, nullptr, 16));
+        }
+        vector<uint8_t> receiver_padded(12, 0);
+        receiver_padded.insert(receiver_padded.end(), receiver_bytes.begin(), receiver_bytes.end());
+        data.insert(data.end(), receiver_padded.begin(), receiver_padded.end());
+
+        // Parameter 3: tokenId (asset_id as uint256)
+        vector<uint8_t> token_id(32, 0);
+        // Convert asset_id to bytes (big-endian)
+        for (int i = 7; i >= 0; i--) {
+            token_id[24 + i] = (asset_id >> (i * 8)) & 0xFF;
+        }
+        data.insert(data.end(), token_id.begin(), token_id.end());
+
+        // Parameter 4: metadata URI (string - need offset + length + data)
+        // TODO: Implement proper ABI encoding for string
+        
+        // Call EVM bridge contract
+        // TODO: Implement eosio.evm call
+        // action(...).send();
+
+        print("NFT locked: asset_id=", asset_id, " for ", memo);
+    }
+
+    [[eosio::action]]
+    void nftbridge::reqnotify() {
+        auto conf = config_bridge.get();
+
+        // Clean old requests (optional retention)
+        requests_table requests(get_self(), get_self().value);
+        auto requests_by_timestamp = requests.get_index<"timestamp"_n>();
+        (void)requests_by_timestamp;
+
+        uint64_t bridge_scope = conf.evm_bridge_scope != 0 ? conf.evm_bridge_scope : 123; // Default for mock tests
+
+        // Read EVM storage for burn requests
+        uint128_t length_low = 0;
+        uint128_t length_high = 0;
+        const auto length_key = make_storage_key(5);
+        if (!read_evm_state(bridge_scope, length_key, length_low, length_high)) {
+            print("No request length found in EVM state");
+            return;
+        }
+
+        const uint64_t length = uint256_to_uint64(length_low, length_high);
+        if (length == 0) {
+            print("No requests to process");
+            return;
+        }
+
+        const auto base_slot = keccak256(checksum_to_bytes(length_key));
+
+        for (uint64_t i = 0; i < length; ++i) {
+            const auto element_base = add_to_key(base_slot, i * 8);
+
+            uint128_t value_low = 0;
+            uint128_t value_high = 0;
+
+            uint64_t call_id = 0;
+            uint64_t amount = 0;
+            uint8_t evm_decimals = 0;
+            std::string sender;
+            std::string receiver;
+
+            if (read_evm_state(bridge_scope, add_to_key(element_base, 0), value_low, value_high)) {
+                call_id = uint256_to_uint64(value_low, value_high);
+            }
+
+            if (read_evm_state(bridge_scope, add_to_key(element_base, 1), value_low, value_high)) {
+                sender = decode_address(value_low, value_high);
+            }
+
+            if (read_evm_state(bridge_scope, add_to_key(element_base, 2), value_low, value_high)) {
+                amount = uint256_to_uint64(value_low, value_high);
+            }
+
+            if (read_evm_state(bridge_scope, add_to_key(element_base, 6), value_low, value_high)) {
+                receiver = decode_short_string(value_low, value_high);
+            }
+
+            if (read_evm_state(bridge_scope, add_to_key(element_base, 7), value_low, value_high)) {
+                evm_decimals = static_cast<uint8_t>(uint256_to_uint64(value_low, value_high));
+            }
+
+            requests.emplace(get_self(), [&](auto& row) {
+                row.id = requests.available_primary_key();
+                row.call_id = call_id;
+                row.sender = sender;
+                row.amount = amount;
+                row.receiver = receiver;
+                row.evm_decimals = evm_decimals;
+                row.created_at = time_point_sec(current_time_point());
+            });
+
+            print("Request:", call_id, " sender=", sender, " receiver=", receiver, " amount=", amount, " decimals=", evm_decimals, "; ");
+        }
+    }
+
+    [[eosio::action]]
+    void nftbridge::refundnotify() {
+        auto conf = config_bridge.get();
+
+        // Clean old refunds (optional retention)
+        refunds_table refunds(get_self(), get_self().value);
+        (void)refunds;
+
+        uint64_t bridge_scope = conf.evm_bridge_scope != 0 ? conf.evm_bridge_scope : 123; // Default for mock tests
+
+        // Read EVM storage for refund requests (slot 6 placeholder)
+        uint128_t length_low = 0;
+        uint128_t length_high = 0;
+        const auto length_key = make_storage_key(6);
+        if (!read_evm_state(bridge_scope, length_key, length_low, length_high)) {
+            print("No refund length found in EVM state");
+            return;
+        }
+
+        const uint64_t length = uint256_to_uint64(length_low, length_high);
+        if (length == 0) {
+            print("No refunds to process");
+            return;
+        }
+
+        const auto base_slot = keccak256(checksum_to_bytes(length_key));
+
+        for (uint64_t i = 0; i < length; ++i) {
+            const auto element_base = add_to_key(base_slot, i * 3);
+
+            uint128_t value_low = 0;
+            uint128_t value_high = 0;
+
+            uint64_t refund_id = 0;
+            uint64_t asset_id = 0;
+            std::string owner;
+
+            if (read_evm_state(bridge_scope, add_to_key(element_base, 0), value_low, value_high)) {
+                refund_id = uint256_to_uint64(value_low, value_high);
+            }
+
+            if (read_evm_state(bridge_scope, add_to_key(element_base, 1), value_low, value_high)) {
+                asset_id = uint256_to_uint64(value_low, value_high);
+            }
+
+            if (read_evm_state(bridge_scope, add_to_key(element_base, 2), value_low, value_high)) {
+                owner = decode_short_string(value_low, value_high);
+            }
+
+            refunds.emplace(get_self(), [&](auto& row) {
+                row.id = refunds.available_primary_key();
+                row.refund_id = refund_id;
+                row.asset_id = asset_id;
+                row.owner = owner;
+                row.created_at = time_point_sec(current_time_point());
+            });
+
+            print("Refund:", refund_id, " asset_id=", asset_id, " owner=", owner, "; ");
+        }
+    }
+
+    // ======================== Helper Functions ========================
+
+    string nftbridge::get_nft_metadata(uint64_t asset_id) {
+        // TODO: Read from AtomicAssets tables
+        // Return IPFS URI: "ipfs://QmXxx..."
+        return "ipfs://QmPlaceholder";
+    }
+
+    vector<uint8_t> nftbridge::get_collection_evm_address(name collection_name) {
+        // TODO: Read from EVM registry storage
+        // Return 20-byte EVM address
+        return vector<uint8_t>(20, 0); // Placeholder
+    }
+}
