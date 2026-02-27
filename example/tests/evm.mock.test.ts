@@ -1,6 +1,12 @@
 const { Chain } = require("qtest-js");
 const { keccak256 } = require('js-sha3');
 
+// EVM Storage Slot Constants (must match Solidity contract storage layout)
+const STORAGE_REGISTER_PAIR_INDEX = 4;      // PairBridgeNFTRegister: pairs array
+const STORAGE_REGISTER_REQUEST_INDEX = 5;   // PairBridgeNFTRegister: requests array
+const STORAGE_BRIDGE_REQUEST_INDEX = 5;     // TokenBridgeNFT: requests array
+const STORAGE_BRIDGE_REFUND_INDEX = 6;      // TokenBridgeNFT: refunds array
+
 describe("Bridge EVM Storage Reading", () => {
     let chain;
     let evmAccount;
@@ -29,9 +35,9 @@ describe("Bridge EVM Storage Reading", () => {
         it("Should read request array length from EVM storage", async () => {
             const bridgeScope = 123; // Mock scope
             
-            // Storage slot 5 = requests array length
+            // requests array length
             console.log("Setting mock request array length in EVM storage...");
-            const lengthKey = createStorageKey(5);
+            const lengthKey = createStorageKey(STORAGE_BRIDGE_REQUEST_INDEX);
             console.log("Length storage key:", lengthKey);
             const lengthValue = uint256(2); // 2 requests
             console.log("Length value (uint256):", lengthValue);
@@ -61,7 +67,7 @@ describe("Bridge EVM Storage Reading", () => {
             const bridgeScope = 123;
             
             // Set array length first
-            const lengthKey = createStorageKey(5);
+            const lengthKey = createStorageKey(STORAGE_BRIDGE_REQUEST_INDEX);
             const lengthVal = uint256(1); // 1 request
             
             await evmContract.action.setstate({
@@ -73,8 +79,8 @@ describe("Bridge EVM Storage Reading", () => {
             
             console.log("✓ Array length set");
             
-            // Calculate request array base slot (keccak256 of slot 5)
-            const slotBytes = Buffer.from(createStorageKey(5), 'hex');
+            // Calculate request array base slot (keccak256 of storage slot)
+            const slotBytes = Buffer.from(createStorageKey(STORAGE_BRIDGE_REQUEST_INDEX), 'hex');
             const requestSlot = keccak256(slotBytes);
             
             console.log("Request base slot:", requestSlot);
@@ -217,7 +223,7 @@ describe("Bridge EVM Storage Reading", () => {
 
             // Set up a request in storage (simulate a pending request)
             const bridgeScope = 2;
-            const lengthKey = createStorageKey(5); // requests.length at slot 5
+            const lengthKey = createStorageKey(STORAGE_BRIDGE_REQUEST_INDEX); // requests.length
             await evmContract.action.setstate({
                 scope: bridgeScope,
                 key: lengthKey,

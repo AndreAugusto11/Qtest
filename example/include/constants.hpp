@@ -49,20 +49,20 @@ namespace evm_bridge
   static constexpr auto WORD_SIZE       = 32u;
   static constexpr size_t CURRENT_CHAIN_ID = CHAIN_ID_MACRO; // auto from build script
   static constexpr eosio::name EVM_SYSTEM_CONTRACT = eosio::name("eosio.evm"); // DON'T CHANGE, this is the eosio.evm contract name
-  static constexpr auto EVM_SUCCESS_CALLBACK_SIGNATURE = "0fbc79cd"; // Dont understand these?
-  static constexpr auto EVM_REFUND_CALLBACK_SIGNATURE = "dc2fdf9f"; // check 'function.signatures.js' 
-  static constexpr auto EVM_SIGN_REGISTRATION_SIGNATURE = "a1d22913";
   
   // NFT Bridge specific signatures
   static constexpr auto EVM_NFT_BRIDGE_TO_SIGNATURE = "7d056de7"; // bridgeTo(address,address,uint256,string)
-  static constexpr auto EVM_REQUEST_SUCCESSFUL_SIGNATURE = "7d9c16c9"; // requestSuccessful(uint256)
-  static constexpr auto EVM_REFUND_SUCCESSFUL_SIGNATURE = "8e198cf1"; // refundSuccessful(uint256)
+  static constexpr auto EVM_REQUEST_SUCCESSFUL_SIGNATURE = "0fbc79cd"; // requestSuccessful(uint256)
+  static constexpr auto EVM_REFUND_SUCCESSFUL_SIGNATURE = "dc2fdf9f"; // refundSuccessful(uint256)
 
   static constexpr uint64_t SIGN_REGISTRATION_GAS = 250000; // Todo: find exact needed gas
   static constexpr uint64_t REFUND_CB_GAS = 250000; // Todo: find exact needed gas
   static constexpr uint64_t SUCCESS_CB_GAS = 250000; // Todo: find exact needed gas
   static constexpr uint64_t BRIDGE_GAS = 250000; // Todo: find exact needed gas
   
+
+  // Storage slot constants (must match Solidity contract storage layout)
+  // If changed, change the tests as well since they directly set these slots to simulate EVM state
   static constexpr uint8_t STORAGE_BRIDGE_REQUEST_INDEX = 5;
   static constexpr uint8_t STORAGE_BRIDGE_REFUND_INDEX = 6;
   static constexpr uint8_t STORAGE_REGISTER_REQUEST_INDEX = 5;

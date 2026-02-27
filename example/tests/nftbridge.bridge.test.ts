@@ -1,6 +1,12 @@
 const { Chain } = require("qtest-js");
 const { keccak256 } = require("js-sha3");
 
+// EVM Storage Slot Constants (must match Solidity contract storage layout)
+const STORAGE_REGISTER_PAIR_INDEX = 4;      // PairBridgeNFTRegister: pairs array
+const STORAGE_REGISTER_REQUEST_INDEX = 5;   // PairBridgeNFTRegister: requests array
+const STORAGE_BRIDGE_REQUEST_INDEX = 5;     // TokenBridgeNFT: requests array
+const STORAGE_BRIDGE_REFUND_INDEX = 6;      // TokenBridgeNFT: refunds array
+
 describe("NFT Bridge - Bridge Function", () => {
     let chain;
     let bridgeAccount, evmAccount, adminAccount, atomicAccount, userAccount;
@@ -120,8 +126,8 @@ describe("NFT Bridge - Bridge Function", () => {
                 return hash.padStart(64, '0');
             }
 
-            // Set pairs array length (slot 4)
-            const pairsLengthKey = createStorageKey(4);
+            // Set pairs array length
+            const pairsLengthKey = createStorageKey(STORAGE_REGISTER_PAIR_INDEX);
             const pairsLength = uint256(1); // 1 pair
 
             await evmContract.action.setstate(
@@ -413,8 +419,8 @@ describe("NFT Bridge - Bridge Function", () => {
                 return hash.padStart(64, '0');
             }
 
-            // Refund array length (slot 6)
-            const refundsLengthKey = createStorageKey(6);
+            // Refund array length
+            const refundsLengthKey = createStorageKey(STORAGE_BRIDGE_REFUND_INDEX);
             const refundsLength = uint256(1);
             await evmContract.action.setstate(
                 {

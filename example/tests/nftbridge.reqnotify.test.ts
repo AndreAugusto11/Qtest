@@ -1,6 +1,12 @@
 const { Chain } = require("qtest-js");
 const { keccak256 } = require("js-sha3");
 
+// EVM Storage Slot Constants (must match Solidity contract storage layout)
+const STORAGE_REGISTER_PAIR_INDEX = 4;      // PairBridgeNFTRegister: pairs array
+const STORAGE_REGISTER_REQUEST_INDEX = 5;   // PairBridgeNFTRegister: requests array
+const STORAGE_BRIDGE_REQUEST_INDEX = 5;     // TokenBridgeNFT: requests array
+const STORAGE_BRIDGE_REFUND_INDEX = 6;      // TokenBridgeNFT: refunds array
+
 describe("NFT Bridge - Request Notify (NFT Request Fulfillment)", () => {
     let chain;
     let bridgeAccount, evmAccount, adminAccount, collectionAccount, userAccount, receiverAccount;
@@ -270,8 +276,8 @@ describe("NFT Bridge - Request Notify (NFT Request Fulfillment)", () => {
                 return hash.padStart(64, '0');
             }
 
-            // Set requests array length (slot 5)
-            const requestsLengthKey = createStorageKey(5);
+            // Set requests array length
+            const requestsLengthKey = createStorageKey(STORAGE_BRIDGE_REQUEST_INDEX);
             const requestsLength = uint256(1);
 
             await evmContract.action.setstate(
@@ -445,8 +451,8 @@ describe("NFT Bridge - Request Notify (NFT Request Fulfillment)", () => {
                 },
                 [{ actor: collectionAccount.name, permission: "active" }]
             );
-            // Set requests array length to 2 (slot 5)
-            const requestsLengthKey = createStorageKey(5);
+            // Set requests array length to 2
+            const requestsLengthKey = createStorageKey(STORAGE_BRIDGE_REQUEST_INDEX);
             const requestsLength = uint256(2);
 
             await evmContract.action.setstate(
@@ -640,8 +646,8 @@ describe("NFT Bridge - Request Notify (NFT Request Fulfillment)", () => {
                 return { value_low: low, value_high: high };
             }
 
-            // Set requests array length to 0 (already cleared from previous tests)
-            const requestsLengthKey = createStorageKey(5);
+            // Set requests array length
+            const requestsLengthKey = createStorageKey(STORAGE_BRIDGE_REQUEST_INDEX);
             const requestsLength = uint256(0);
 
             await evmContract.action.setstate(
