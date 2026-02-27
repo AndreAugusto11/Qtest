@@ -1,11 +1,12 @@
 #include "../include/nftbridge.hpp"
+#include "../include/constants.hpp"
 
 #include <array>
 
 namespace nft_bridge
 {
     namespace {
-        constexpr name evm_account = "eosio.evm"_n;
+        constexpr name evm_account = evm_bridge::EVM_SYSTEM_CONTRACT;
 
         std::array<uint8_t, 32> checksum_to_bytes(const checksum256& value) {
             return value.extract_as_byte_array();
@@ -64,6 +65,17 @@ namespace nft_bridge
                 out.push_back(hex[byte & 0x0F]);
             }
             return out;
+        }
+
+        std::vector<uint8_t> from_hex(const std::string& hex_str) {
+            std::vector<uint8_t> result;
+            result.reserve(hex_str.size() / 2);
+            for (size_t i = 0; i < hex_str.size(); i += 2) {
+                uint8_t high = (hex_str[i] >= '0' && hex_str[i] <= '9') ? (hex_str[i] - '0') : (hex_str[i] - 'a' + 10);
+                uint8_t low = (hex_str[i+1] >= '0' && hex_str[i+1] <= '9') ? (hex_str[i+1] - '0') : (hex_str[i+1] - 'a' + 10);
+                result.push_back((high << 4) | low);
+            }
+            return result;
         }
 
         std::string decode_short_string(uint128_t low, uint128_t high) {
@@ -312,7 +324,7 @@ namespace nft_bridge
         auto register_account_states_bykey = register_account_states.get_index<"bykey"_n>();
 
         // Get array slot to find PairNFT pairs[] array length
-        auto pair_storage_key = make_storage_key(4); // STORAGE_REGISTER_PAIR_INDEX
+        auto pair_storage_key = make_storage_key(evm_bridge::STORAGE_REGISTER_PAIR_INDEX);
         auto pair_array_length_state = register_account_states_bykey.find(pair_storage_key);
         check(pair_array_length_state != register_account_states_bykey.end(), "No NFT pairs found in EVM register");
         
@@ -368,7 +380,7 @@ namespace nft_bridge
         
         // Function signature: bridgeTo(address,address,uint256,string)
         // keccak256("bridgeTo(address,address,uint256,string)") = 0x7d056de7... (first 4 bytes)
-        vector<uint8_t> fnsig = {0x7d, 0x05, 0x6d, 0xe7}; // Placeholder signature
+        vector<uint8_t> fnsig = from_hex(evm_bridge::EVM_NFT_BRIDGE_TO_SIGNATURE);
         data.insert(data.end(), fnsig.begin(), fnsig.end());
 
         // Parameter 1: token (EVM NFT contract address) - padded to 32 bytes
@@ -448,10 +460,10 @@ namespace nft_bridge
         auto conf = config_bridge.get();
         uint64_t bridge_scope = conf.evm_bridge_scope != 0 ? conf.evm_bridge_scope : 123;
 
-        // Read EVM storage for NFT unlock requests (slot 5)
+        // Read EVM storage for NFT unlock requests
         uint128_t length_low = 0;
         uint128_t length_high = 0;
-        const auto length_key = make_storage_key(5);
+        const auto length_key = make_storage_key(evm_bridge::STORAGE_BRIDGE_REQUEST_INDEX);
         if (!read_evm_state(bridge_scope, length_key, length_low, length_high)) {
             print("No request length found in EVM state");
             return;
@@ -536,7 +548,7 @@ namespace nft_bridge
                 // Prepare EVM function call: requestSuccessful(uint256 id)
                 // Function selector: keccak256("requestSuccessful(uint256)") first 4 bytes
                 std::vector<uint8_t> data;
-                vector<uint8_t> fnsig = {0x7d, 0x9c, 0x16, 0xc9}; // Placeholder - need actual selector
+                vector<uint8_t> fnsig = from_hex(evm_bridge::EVM_REQUEST_SUCCESSFUL_SIGNATURE);
                 data.insert(data.end(), fnsig.begin(), fnsig.end());
 
                 // Parameter: id (call_id as uint256) - 32 bytes
@@ -586,10 +598,10 @@ namespace nft_bridge
 
         uint64_t bridge_scope = conf.evm_bridge_scope != 0 ? conf.evm_bridge_scope : 123; // Default for mock tests
 
-        // Read EVM storage for refund requests (slot 6 placeholder)
+        // Read EVM storage for refund requests
         uint128_t length_low = 0;
         uint128_t length_high = 0;
-        const auto length_key = make_storage_key(6);
+        const auto length_key = make_storage_key(evm_bridge::STORAGE_BRIDGE_REFUND_INDEX);
         if (!read_evm_state(bridge_scope, length_key, length_low, length_high)) {
             print("No refund length found in EVM state");
             return;
@@ -657,7 +669,7 @@ namespace nft_bridge
             // Prepare EVM function call: refundSuccessful(uint256 id)
             // Function selector: keccak256("refundSuccessful(uint256)") first 4 bytes
             std::vector<uint8_t> data;
-            vector<uint8_t> fnsig = {0x8e, 0x19, 0x8c, 0xf1}; // Placeholder - need actual selector
+            vector<uint8_t> fnsig = from_hex(evm_bridge::EVM_REFUND_SUCCESSFUL_SIGNATURE);
             data.insert(data.end(), fnsig.begin(), fnsig.end());
 
             // Parameter: id (refund_id as uint256) - 32 bytes

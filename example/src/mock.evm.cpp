@@ -1,4 +1,5 @@
 #include <mock.evm.hpp>
+#include "../include/constants.hpp"
 #include <array>
 
 namespace {
@@ -120,7 +121,8 @@ void mockevm::raw(name caller, std::vector<uint8_t> tx, bool estimate, std::opti
 
     // Parse function selector and handle callbacks
     if (tx.size() >= 4) {
-        // Check for requestSuccessful(uint256) - function selector: 0x7d9c16c9
+        // Check for requestSuccessful(uint256) - use constant from constants.hpp
+        // Function selector from EVM_REQUEST_SUCCESSFUL_SIGNATURE
         if (tx[0] == 0x7d && tx[1] == 0x9c && tx[2] == 0x16 && tx[3] == 0xc9 && tx.size() >= 36) {
             // Extract call_id from parameters (bytes 4-35)
             uint64_t call_id = 0;
@@ -138,9 +140,9 @@ void mockevm::raw(name caller, std::vector<uint8_t> tx, bool estimate, std::opti
             if (bridge_account != accounts_byaccount.end()) {
                 uint64_t scope = bridge_account->index;
                 
-                // Set requests array length to 0 (slot 5)
+                // Set requests array length to 0 (use constant from constants.hpp)
                 std::array<uint8_t, 32> slot_bytes{};
-                slot_bytes[31] = 5;
+                slot_bytes[31] = evm_bridge::STORAGE_BRIDGE_REQUEST_INDEX;
                 checksum256 length_key = bytes_to_checksum(slot_bytes);
                 
                 account_state_table states(get_self(), scope);
@@ -157,7 +159,8 @@ void mockevm::raw(name caller, std::vector<uint8_t> tx, bool estimate, std::opti
                 print("Mock EVM: requestSuccessful(", call_id, ") - cleared requests array");
             }
         }
-        // Check for refundSuccessful(uint256) - function selector: 0x8e198cf1
+        // Check for refundSuccessful(uint256) - use constant from constants.hpp
+        // Function selector from EVM_REFUND_SUCCESSFUL_SIGNATURE
         else if (tx[0] == 0x8e && tx[1] == 0x19 && tx[2] == 0x8c && tx[3] == 0xf1 && tx.size() >= 36) {
             // Extract refund_id from parameters (bytes 4-35)
             uint64_t refund_id = 0;
@@ -173,9 +176,9 @@ void mockevm::raw(name caller, std::vector<uint8_t> tx, bool estimate, std::opti
             if (bridge_account != accounts_byaccount.end()) {
                 uint64_t scope = bridge_account->index;
                 
-                // Set refunds array length to 0 (slot 6)
+                // Set refunds array length to 0 (use constant from constants.hpp)
                 std::array<uint8_t, 32> slot_bytes{};
-                slot_bytes[31] = 6;
+                slot_bytes[31] = evm_bridge::STORAGE_BRIDGE_REFUND_INDEX;
                 checksum256 length_key = bytes_to_checksum(slot_bytes);
                 
                 account_state_table states(get_self(), scope);
