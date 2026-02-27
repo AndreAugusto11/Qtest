@@ -726,6 +726,7 @@ namespace nft_bridge
 
     string nftbridge::get_nft_metadata(uint64_t asset_id) {
         // TODO: Read from AtomicAssets tables
+        // EDIT: Probably we will not need this. The data can be read directly from AtomicAssets tables using the collection name and asset ID, so we don't need to pass it through the bridge.
         // Return IPFS URI: "ipfs://QmXxx..."
         return "ipfs://QmPlaceholder";
     }
