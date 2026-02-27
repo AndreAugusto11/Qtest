@@ -1,5 +1,6 @@
 const { Chain } = require("qtest-js");
 const { keccak256 } = require('js-sha3');
+const { createStorageKey, uint256, addToKey, addressToUint256, stringToStorageValue } = require('./test-utils');
 
 // EVM Storage Slot Constants (must match Solidity contract storage layout)
 const STORAGE_REGISTER_PAIR_INDEX = 4;      // PairBridgeNFTRegister: pairs array
@@ -105,21 +106,41 @@ describe("Bridge EVM Storage Reading", () => {
             }, [{ actor: evmAccount.name, permission: "active" }]);
             console.log("✓ Sender address set");
             
-            // Property 2: amount = 100.0000 TLOS (4 decimals)
-            const amountVal = uint256("1000000"); // 100.0000 with 4 decimals
+            // Property 2: tokenId (asset_id)
+            const amountVal = uint256("1000000"); // Mock asset_id
             await evmContract.action.setstate({
                 scope: bridgeScope,
                 key: addToKey(requestSlot, 2),
                 value_low: amountVal.value_low,
                 value_high: amountVal.value_high
             }, [{ actor: evmAccount.name, permission: "active" }]);
-            console.log("✓ Amount set");
+            console.log("✓ Token ID set");
             
-            // Property 6: receiver = "alice.tlos"
+            // Property 3: requested_at
+            const requestedAtVal = uint256("123456");
+            await evmContract.action.setstate({
+                scope: bridgeScope,
+                key: addToKey(requestSlot, 3),
+                value_low: requestedAtVal.value_low,
+                value_high: requestedAtVal.value_high
+            }, [{ actor: evmAccount.name, permission: "active" }]);
+            console.log("✓ Requested_at set");
+
+            // Property 4: collectionName
+            const collectionVal = stringToStorageValue("alice.tlos");
+            await evmContract.action.setstate({
+                scope: bridgeScope,
+                key: addToKey(requestSlot, 4),
+                value_low: collectionVal.value_low,
+                value_high: collectionVal.value_high
+            }, [{ actor: evmAccount.name, permission: "active" }]);
+            console.log("✓ Collection set");
+
+            // Property 5: receiver = "alice.tlos"
             const receiverVal = stringToStorageValue("alice.tlos");
             await evmContract.action.setstate({
                 scope: bridgeScope,
-                key: addToKey(requestSlot, 6),
+                key: addToKey(requestSlot, 5),
                 value_low: receiverVal.value_low,
                 value_high: receiverVal.value_high
             }, [{ actor: evmAccount.name, permission: "active" }]);
@@ -134,7 +155,7 @@ describe("Bridge EVM Storage Reading", () => {
             });
             
             console.log("Stored states:", stateTable.rows);
-            expect(stateTable.rows.length).toBe(5); // length + 4 properties
+            expect(stateTable.rows.length).toBe(7); // length + 6 properties (Request has 6 fields)
         });
     });
 
@@ -232,11 +253,11 @@ describe("Bridge EVM Storage Reading", () => {
             }, [{ actor: evmAccount.name, permission: "active" }]);
 
             // Create RLP-encoded requestSuccessful(uint256) call
-            // Function selector: 7d9c16c9
+            // Function selector: 0fbc79cd (from EVM_REQUEST_SUCCESSFUL_SIGNATURE)
             const rlp = require('rlp');
             
             const callId = 123;
-            const dataHex = "7d9c16c9" + callId.toString(16).padStart(64, '0'); // requestSuccessful(123)
+            const dataHex = "0fbc79cd" + callId.toString(16).padStart(64, '0'); // requestSuccessful(123)
             const data = Buffer.from(dataHex, "hex");
             
             const rlpEncoded = rlp.encode([
@@ -276,62 +297,3 @@ describe("Bridge EVM Storage Reading", () => {
         });
     });
 });
-
-// Helper functions
-function createStorageKey(slot) {
-    // Convert slot number to checksum256 (64 hex chars)
-    const hex = slot.toString(16).padStart(64, '0');
-    return hex;
-}
-
-function uint256(value) {
-    // Split into low and high 128 bits
-    const bn = BigInt(value);
-    const mask128 = BigInt('0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF');
-    const low = (bn & mask128).toString();  // Return as decimal string
-    const high = (bn >> BigInt(128)).toString();  // Return as decimal string
-    
-    return {
-        value_low: low,
-        value_high: high
-    };
-}
-
-function addToKey(baseKey, offset) {
-    // baseKey is hex string without 0x
-    // Add offset and return as checksum256 (64 hex chars)
-    const bn = BigInt('0x' + baseKey) + BigInt(offset);
-    return bn.toString(16).padStart(64, '0');
-}
-
-function addressToUint256(address) {
-    // Convert 0x... address to uint256
-    // Address is 20 bytes (40 hex chars), pad to 32 bytes (64 hex chars)
-    const cleanAddr = address.slice(2); // Remove 0x
-    const paddedHex = cleanAddr.toLowerCase().padStart(64, '0');
-    
-    // Split into low/high 128 bits
-    const low = BigInt('0x' + paddedHex.slice(32)); // Last 32 hex chars
-    const high = BigInt('0x' + paddedHex.slice(0, 32)); // First 32 hex chars
-    
-    return {
-        value_low: low.toString(), // Decimal string
-        value_high: high.toString() // Decimal string
-    };
-}
-
-function stringToStorageValue(str) {
-    // Encode string for storage (< 32 bytes inline)
-    const hex = Buffer.from(str).toString('hex');
-    const length = str.length * 2; // length encoding
-    const paddedHex = hex.padEnd(62, '0') + length.toString(16).padStart(2, '0');
-    
-    // Split into low/high
-    const low = BigInt('0x' + paddedHex.slice(32));
-    const high = BigInt('0x' + paddedHex.slice(0, 32));
-    
-    return {
-        value_low: low.toString(),
-        value_high: high.toString()
-    };
-}

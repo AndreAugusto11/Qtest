@@ -5,6 +5,18 @@
 #include <array>
 
 namespace {
+    // Helper to convert hex string to bytes
+    std::vector<uint8_t> from_hex(const std::string& hex_str) {
+        std::vector<uint8_t> result;
+        result.reserve(hex_str.size() / 2);
+        for (size_t i = 0; i < hex_str.size(); i += 2) {
+            uint8_t high = (hex_str[i] >= '0' && hex_str[i] <= '9') ? (hex_str[i] - '0') : (hex_str[i] - 'a' + 10);
+            uint8_t low = (hex_str[i+1] >= '0' && hex_str[i+1] <= '9') ? (hex_str[i+1] - '0') : (hex_str[i+1] - 'a' + 10);
+            result.push_back((high << 4) | low);
+        }
+        return result;
+    }
+
     // Helper to convert checksum256 to bytes
     std::array<uint8_t, 32> checksum_to_bytes(const checksum256& value) {
         return value.extract_as_byte_array();
@@ -206,9 +218,10 @@ void mockevm::raw(name caller, std::vector<uint8_t> tx, bool estimate, std::opti
 
     // Parse function selector and handle callbacks (using decoded data)
     if (data.size() >= 4) {
-        // Check for requestSuccessful(uint256) - use constant from constants.hpp
-        // Function selector from EVM_REQUEST_SUCCESSFUL_SIGNATURE
-        if (data[0] == 0x7d && data[1] == 0x9c && data[2] == 0x16 && data[3] == 0xc9 && data.size() >= 36) {
+        // Check for requestSuccessful(uint256)
+        auto request_sig = from_hex(evm_bridge::EVM_REQUEST_SUCCESSFUL_SIGNATURE);
+        if (data.size() >= 36 && data[0] == request_sig[0] && data[1] == request_sig[1] && 
+            data[2] == request_sig[2] && data[3] == request_sig[3]) {
             // Extract call_id from parameters (bytes 4-35)
             uint64_t call_id = 0;
             for (int i = 0; i < 8; ++i) {
@@ -244,40 +257,43 @@ void mockevm::raw(name caller, std::vector<uint8_t> tx, bool estimate, std::opti
                 print("Mock EVM: requestSuccessful(", call_id, ") - cleared requests array");
             }
         }
-        // Check for refundSuccessful(uint256) - use constant from constants.hpp
-        // Function selector from EVM_REFUND_SUCCESSFUL_SIGNATURE
-        else if (data[0] == 0x8e && data[1] == 0x19 && data[2] == 0x8c && data[3] == 0xf1 && data.size() >= 36) {
-            // Extract refund_id from parameters (bytes 4-35)
-            uint64_t refund_id = 0;
-            for (int i = 0; i < 8; ++i) {
-                refund_id = (refund_id << 8) | data[28 + i];
-            }
-            
-            // Delete refund from storage by setting refunds.length = 0
-            account_table accounts(get_self(), get_self().value);
-            auto accounts_byaccount = accounts.get_index<"byaccount"_n>();
-            auto bridge_account = accounts_byaccount.find(caller.value);
-            
-            if (bridge_account != accounts_byaccount.end()) {
-                uint64_t scope = bridge_account->index;
-                
-                // Set refunds array length to 0 (use constant from constants.hpp)
-                std::array<uint8_t, 32> slot_bytes{};
-                slot_bytes[31] = evm_bridge::STORAGE_BRIDGE_REFUND_INDEX;
-                checksum256 length_key = bytes_to_checksum(slot_bytes);
-                
-                account_state_table states(get_self(), scope);
-                auto states_bykey = states.get_index<"bykey"_n>();
-                auto existing = states_bykey.find(length_key);
-                
-                if (existing != states_bykey.end()) {
-                    states.modify(*existing, get_self(), [&](auto& row) {
-                        row.value_low = 0;
-                        row.value_high = 0;
-                    });
+        // Check for refundSuccessful(uint256)
+        else {
+            auto refund_sig = from_hex(evm_bridge::EVM_REFUND_SUCCESSFUL_SIGNATURE);
+            if (data.size() >= 36 && data[0] == refund_sig[0] && data[1] == refund_sig[1] && 
+                data[2] == refund_sig[2] && data[3] == refund_sig[3]) {
+                // Extract refund_id from parameters (bytes 4-35)
+                uint64_t refund_id = 0;
+                for (int i = 0; i < 8; ++i) {
+                    refund_id = (refund_id << 8) | data[28 + i];
                 }
                 
-                print("Mock EVM: refundSuccessful(", refund_id, ") - cleared refunds array");
+                // Delete refund from storage by setting refunds.length = 0
+                account_table accounts(get_self(), get_self().value);
+                auto accounts_byaccount = accounts.get_index<"byaccount"_n>();
+                auto bridge_account = accounts_byaccount.find(caller.value);
+                
+                if (bridge_account != accounts_byaccount.end()) {
+                    uint64_t scope = bridge_account->index;
+                    
+                    // Set refunds array length to 0 (use constant from constants.hpp)
+                    std::array<uint8_t, 32> slot_bytes{};
+                    slot_bytes[31] = evm_bridge::STORAGE_BRIDGE_REFUND_INDEX;
+                    checksum256 length_key = bytes_to_checksum(slot_bytes);
+                    
+                    account_state_table states(get_self(), scope);
+                    auto states_bykey = states.get_index<"bykey"_n>();
+                    auto existing = states_bykey.find(length_key);
+                    
+                    if (existing != states_bykey.end()) {
+                        states.modify(*existing, get_self(), [&](auto& row) {
+                            row.value_low = 0;
+                            row.value_high = 0;
+                        });
+                    }
+                    
+                    print("Mock EVM: refundSuccessful(", refund_id, ") - cleared refunds array");
+                }
             }
         }
     }

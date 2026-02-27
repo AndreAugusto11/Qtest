@@ -1,5 +1,6 @@
 const { Chain } = require("qtest-js");
 const { keccak256 } = require("js-sha3");
+const { createStorageKey, uint256, stringToStorageValue, addressToUint256, keccak256ArraySlot } = require('./test-utils');
 
 // EVM Storage Slot Constants (must match Solidity contract storage layout)
 const STORAGE_REGISTER_PAIR_INDEX = 4;      // PairBridgeNFTRegister: pairs array
@@ -106,40 +107,8 @@ describe("NFT Bridge - Request Notify (NFT Request Fulfillment)", () => {
 
             console.log("✓ NFT minted to user");
 
-            // Helper functions for EVM storage
-            function uint256(value) {
-                const bn = BigInt(value);
-                const mask128 = BigInt('0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF');
-                const low = (bn & mask128).toString();
-                const high = (bn >> BigInt(128)).toString();
-                return { value_low: low, value_high: high };
-            }
-
-            function stringToStorageValue(str) {
-                const hex = Buffer.from(str).toString('hex');
-                const length = str.length * 2;
-                const paddedHex = hex.padEnd(62, '0') + length.toString(16).padStart(2, '0');
-                const low = BigInt('0x' + paddedHex.slice(32));
-                const high = BigInt('0x' + paddedHex.slice(0, 32));
-                return { value_low: low.toString(), value_high: high.toString() };
-            }
-
-            function addressToUint256(address) {
-                const cleanAddr = address.slice(2).toLowerCase();
-                const paddedHex = cleanAddr.padStart(64, '0');
-                const low = BigInt('0x' + paddedHex.slice(32));
-                const high = BigInt('0x' + paddedHex.slice(0, 32));
-                return { value_low: low.toString(), value_high: high.toString() };
-            }
-
-            function keccak256ArraySlot(slot) {
-                const slotHex = slot.toString(16).padStart(64, '0');
-                const hash = keccak256(Buffer.from(slotHex, 'hex'));
-                return hash.padStart(64, '0');
-            }
-
             // Register NFT pair in EVM register (slot 4)
-            // The notify_nft action looks for pairs at storage key 4 (STORAGE_REGISTER_PAIR_INDEX)
+            // The notify_nft action looks for pairs at STORAGE_REGISTER_PAIR_INDEX
             const pairsLengthKey = '0000000000000000000000000000000000000000000000000000000000000004';
             const pairsLength = uint256(1);
 
@@ -154,8 +123,8 @@ describe("NFT Bridge - Request Notify (NFT Request Fulfillment)", () => {
             );
 
             // Calculate base slot for pairs array (slot 4)
-            const pairsBaseSlot = keccak256ArraySlot(4);
-            const propertyCount = 8;
+            const pairsBaseSlot = keccak256ArraySlot(STORAGE_REGISTER_PAIR_INDEX);
+            const propertyCount = 7;
             const pairIndex = 0;
 
             // Property 0: active = 1 (pair is active)
@@ -182,7 +151,7 @@ describe("NFT Bridge - Request Notify (NFT Request Fulfillment)", () => {
                 [{ actor: evmAccount.name, permission: "active" }]
             );
 
-            // Property 3: antelopeIssuerName (collection)
+            // Property 3: collectionName
             const issuerKey = (BigInt('0x' + pairsBaseSlot) + BigInt(3 + propertyCount * pairIndex)).toString(16).padStart(64, '0');
             const issuerValue = stringToStorageValue("mycollect");
             await evmContract.action.setstate(
@@ -190,7 +159,7 @@ describe("NFT Bridge - Request Notify (NFT Request Fulfillment)", () => {
                 [{ actor: evmAccount.name, permission: "active" }]
             );
 
-            // Property 4: antelopeAccountName (collection account)
+            // Property 4: collectionCreator
             const accountKey = (BigInt('0x' + pairsBaseSlot) + BigInt(4 + propertyCount * pairIndex)).toString(16).padStart(64, '0');
             const accountValue = stringToStorageValue("mycollect");
             await evmContract.action.setstate(
@@ -198,24 +167,16 @@ describe("NFT Bridge - Request Notify (NFT Request Fulfillment)", () => {
                 [{ actor: evmAccount.name, permission: "active" }]
             );
 
-            // Property 5: antelopeSymbolName
-            const symbolKey = (BigInt('0x' + pairsBaseSlot) + BigInt(5 + propertyCount * pairIndex)).toString(16).padStart(64, '0');
-            const symbolValue = stringToStorageValue("MYNFT");
-            await evmContract.action.setstate(
-                { scope: registerScope, key: symbolKey, value_low: symbolValue.value_low, value_high: symbolValue.value_high },
-                [{ actor: evmAccount.name, permission: "active" }]
-            );
-
-            // Property 6: evmSymbol
-            const evmSymbolKey = (BigInt('0x' + pairsBaseSlot) + BigInt(6 + propertyCount * pairIndex)).toString(16).padStart(64, '0');
+            // Property 5: evmSymbol
+            const evmSymbolKey = (BigInt('0x' + pairsBaseSlot) + BigInt(5 + propertyCount * pairIndex)).toString(16).padStart(64, '0');
             const evmSymbolValue = stringToStorageValue("MYNFT");
             await evmContract.action.setstate(
                 { scope: registerScope, key: evmSymbolKey, value_low: evmSymbolValue.value_low, value_high: evmSymbolValue.value_high },
                 [{ actor: evmAccount.name, permission: "active" }]
             );
 
-            // Property 7: evmName
-            const evmNameKey = (BigInt('0x' + pairsBaseSlot) + BigInt(7 + propertyCount * pairIndex)).toString(16).padStart(64, '0');
+            // Property 6: evmName
+            const evmNameKey = (BigInt('0x' + pairsBaseSlot) + BigInt(6 + propertyCount * pairIndex)).toString(16).padStart(64, '0');
             const evmNameValue = stringToStorageValue("My NFT");
             await evmContract.action.setstate(
                 { scope: registerScope, key: evmNameKey, value_low: evmNameValue.value_low, value_high: evmNameValue.value_high },
@@ -241,41 +202,6 @@ describe("NFT Bridge - Request Notify (NFT Request Fulfillment)", () => {
 
     describe(":: Bridge NFT Requests from EVM", () => {
         it("Should process single NFT request (unlock)", async () => {
-            function createStorageKey(slot) {
-                return slot.toString(16).padStart(64, '0');
-            }
-
-            function uint256(value) {
-                const bn = BigInt(value);
-                const mask128 = BigInt('0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF');
-                const low = (bn & mask128).toString();
-                const high = (bn >> BigInt(128)).toString();
-                return { value_low: low, value_high: high };
-            }
-
-            function stringToStorageValue(str) {
-                const hex = Buffer.from(str).toString('hex');
-                const length = str.length * 2;
-                const paddedHex = hex.padEnd(62, '0') + length.toString(16).padStart(2, '0');
-                const low = BigInt('0x' + paddedHex.slice(32));
-                const high = BigInt('0x' + paddedHex.slice(0, 32));
-                return { value_low: low.toString(), value_high: high.toString() };
-            }
-
-            function addressToUint256(address) {
-                const cleanAddr = address.slice(2).toLowerCase();
-                const paddedHex = cleanAddr.padStart(64, '0');
-                const low = BigInt('0x' + paddedHex.slice(32));
-                const high = BigInt('0x' + paddedHex.slice(0, 32));
-                return { value_low: low.toString(), value_high: high.toString() };
-            }
-
-            function keccak256ArraySlot(slot) {
-                const slotHex = slot.toString(16).padStart(64, '0');
-                const hash = keccak256(Buffer.from(slotHex, 'hex'));
-                return hash.padStart(64, '0');
-            }
-
             // Set requests array length
             const requestsLengthKey = createStorageKey(STORAGE_BRIDGE_REQUEST_INDEX);
             const requestsLength = uint256(1);
@@ -291,10 +217,10 @@ describe("NFT Bridge - Request Notify (NFT Request Fulfillment)", () => {
             );
 
             // Calculate base slot for requests array
-            const requestsBaseSlot = keccak256ArraySlot(5);
+            const requestsBaseSlot = keccak256ArraySlot(STORAGE_BRIDGE_REQUEST_INDEX);
 
-            // Set up request 0 (8 properties per request)
-            const propertyCount = 8;
+            // Set up request 0 (6 properties per request)
+            const propertyCount = 6;
             const requestIndex = 0;
 
             // Property 0: call_id = 1001
@@ -321,19 +247,19 @@ describe("NFT Bridge - Request Notify (NFT Request Fulfillment)", () => {
                 [{ actor: evmAccount.name, permission: "active" }]
             );
 
-            // Property 3: collection (mycollect)
-            const collectionKey = (BigInt('0x' + requestsBaseSlot) + BigInt(3 + propertyCount * requestIndex)).toString(16).padStart(64, '0');
-            const collectionValue = stringToStorageValue("mycollect");
+            // Property 3: requested_at (timestamp)
+            const requestedAtKey = (BigInt('0x' + requestsBaseSlot) + BigInt(3 + propertyCount * requestIndex)).toString(16).padStart(64, '0');
+            const requestedAtValue = uint256(123456);
             await evmContract.action.setstate(
-                { scope: bridgeScope, key: collectionKey, value_low: collectionValue.value_low, value_high: collectionValue.value_high },
+                { scope: bridgeScope, key: requestedAtKey, value_low: requestedAtValue.value_low, value_high: requestedAtValue.value_high },
                 [{ actor: evmAccount.name, permission: "active" }]
             );
 
-            // Property 4: token_symbol
-            const tokenSymbolKey = (BigInt('0x' + requestsBaseSlot) + BigInt(4 + propertyCount * requestIndex)).toString(16).padStart(64, '0');
-            const tokenSymbolValue = stringToStorageValue("NFT");
+            // Property 4: collection (mycollect)
+            const collectionKey = (BigInt('0x' + requestsBaseSlot) + BigInt(4 + propertyCount * requestIndex)).toString(16).padStart(64, '0');
+            const collectionValue = stringToStorageValue("mycollect");
             await evmContract.action.setstate(
-                { scope: bridgeScope, key: tokenSymbolKey, value_low: tokenSymbolValue.value_low, value_high: tokenSymbolValue.value_high },
+                { scope: bridgeScope, key: collectionKey, value_low: collectionValue.value_low, value_high: collectionValue.value_high },
                 [{ actor: evmAccount.name, permission: "active" }]
             );
 
@@ -342,14 +268,6 @@ describe("NFT Bridge - Request Notify (NFT Request Fulfillment)", () => {
             const receiverValue = stringToStorageValue(receiverAccount.name);
             await evmContract.action.setstate(
                 { scope: bridgeScope, key: receiverKey, value_low: receiverValue.value_low, value_high: receiverValue.value_high },
-                [{ actor: evmAccount.name, permission: "active" }]
-            );
-
-            // Property 7: evm_decimals (not used for NFTs)
-            const decimalsKey = (BigInt('0x' + requestsBaseSlot) + BigInt(7 + propertyCount * requestIndex)).toString(16).padStart(64, '0');
-            const decimalsValue = uint256(0);
-            await evmContract.action.setstate(
-                { scope: bridgeScope, key: decimalsKey, value_low: decimalsValue.value_low, value_high: decimalsValue.value_high },
                 [{ actor: evmAccount.name, permission: "active" }]
             );
 
@@ -406,8 +324,8 @@ describe("NFT Bridge - Request Notify (NFT Request Fulfillment)", () => {
 
             function stringToStorageValue(str) {
                 const hex = Buffer.from(str).toString('hex');
-                const length = str.length * 2;
-                const paddedHex = hex.padEnd(62, '0') + length.toString(16).padStart(2, '0');
+                const length = str.length;
+                const paddedHex = hex.padEnd(62, '0') + (length * 2).toString(16).padStart(2, '0');
                 const low = BigInt('0x' + paddedHex.slice(32));
                 const high = BigInt('0x' + paddedHex.slice(0, 32));
                 return { value_low: low.toString(), value_high: high.toString() };
@@ -466,8 +384,8 @@ describe("NFT Bridge - Request Notify (NFT Request Fulfillment)", () => {
             );
 
             // Calculate base slot for requests array
-            const requestsBaseSlot = keccak256ArraySlot(5);
-            const propertyCount = 8;
+            const requestsBaseSlot = keccak256ArraySlot(STORAGE_BRIDGE_REQUEST_INDEX);
+            const propertyCount = 6;
 
             // === Request 0: NFT 102 to bob ===
             let requestIndex = 0;
@@ -496,19 +414,19 @@ describe("NFT Bridge - Request Notify (NFT Request Fulfillment)", () => {
                 [{ actor: evmAccount.name, permission: "active" }]
             );
 
-            // Property 3: collection
-            let collectionKey = (BigInt('0x' + requestsBaseSlot) + BigInt(3 + propertyCount * requestIndex)).toString(16).padStart(64, '0');
-            let collectionValue = stringToStorageValue("mycollect");
+            // Property 3: requested_at
+            let requestedAtKey = (BigInt('0x' + requestsBaseSlot) + BigInt(3 + propertyCount * requestIndex)).toString(16).padStart(64, '0');
+            let requestedAtValue = uint256(123456);
             await evmContract.action.setstate(
-                { scope: bridgeScope, key: collectionKey, value_low: collectionValue.value_low, value_high: collectionValue.value_high },
+                { scope: bridgeScope, key: requestedAtKey, value_low: requestedAtValue.value_low, value_high: requestedAtValue.value_high },
                 [{ actor: evmAccount.name, permission: "active" }]
             );
 
-            // Property 4: token_symbol
-            let tokenSymbolKey = (BigInt('0x' + requestsBaseSlot) + BigInt(4 + propertyCount * requestIndex)).toString(16).padStart(64, '0');
-            let tokenSymbolValue = stringToStorageValue("NFT");
+            // Property 4: collection
+            let collectionKey = (BigInt('0x' + requestsBaseSlot) + BigInt(4 + propertyCount * requestIndex)).toString(16).padStart(64, '0');
+            let collectionValue = stringToStorageValue("mycollect");
             await evmContract.action.setstate(
-                { scope: bridgeScope, key: tokenSymbolKey, value_low: tokenSymbolValue.value_low, value_high: tokenSymbolValue.value_high },
+                { scope: bridgeScope, key: collectionKey, value_low: collectionValue.value_low, value_high: collectionValue.value_high },
                 [{ actor: evmAccount.name, permission: "active" }]
             );
 
@@ -517,14 +435,6 @@ describe("NFT Bridge - Request Notify (NFT Request Fulfillment)", () => {
             let receiverValue = stringToStorageValue(receiverAccount.name);
             await evmContract.action.setstate(
                 { scope: bridgeScope, key: receiverKey, value_low: receiverValue.value_low, value_high: receiverValue.value_high },
-                [{ actor: evmAccount.name, permission: "active" }]
-            );
-
-            // Property 7: evm_decimals
-            let decimalsKey = (BigInt('0x' + requestsBaseSlot) + BigInt(7 + propertyCount * requestIndex)).toString(16).padStart(64, '0');
-            let decimalsValue = uint256(0);
-            await evmContract.action.setstate(
-                { scope: bridgeScope, key: decimalsKey, value_low: decimalsValue.value_low, value_high: decimalsValue.value_high },
                 [{ actor: evmAccount.name, permission: "active" }]
             );
 
@@ -555,19 +465,19 @@ describe("NFT Bridge - Request Notify (NFT Request Fulfillment)", () => {
                 [{ actor: evmAccount.name, permission: "active" }]
             );
 
-            // Property 3: collection
-            collectionKey = (BigInt('0x' + requestsBaseSlot) + BigInt(3 + propertyCount * requestIndex)).toString(16).padStart(64, '0');
-            collectionValue = stringToStorageValue("mycollect");
+            // Property 3: requested_at
+            requestedAtKey = (BigInt('0x' + requestsBaseSlot) + BigInt(3 + propertyCount * requestIndex)).toString(16).padStart(64, '0');
+            requestedAtValue = uint256(123457);
             await evmContract.action.setstate(
-                { scope: bridgeScope, key: collectionKey, value_low: collectionValue.value_low, value_high: collectionValue.value_high },
+                { scope: bridgeScope, key: requestedAtKey, value_low: requestedAtValue.value_low, value_high: requestedAtValue.value_high },
                 [{ actor: evmAccount.name, permission: "active" }]
             );
 
-            // Property 4: token_symbol
-            tokenSymbolKey = (BigInt('0x' + requestsBaseSlot) + BigInt(4 + propertyCount * requestIndex)).toString(16).padStart(64, '0');
-            tokenSymbolValue = stringToStorageValue("NFT");
+            // Property 4: collection
+            collectionKey = (BigInt('0x' + requestsBaseSlot) + BigInt(4 + propertyCount * requestIndex)).toString(16).padStart(64, '0');
+            collectionValue = stringToStorageValue("mycollect");
             await evmContract.action.setstate(
-                { scope: bridgeScope, key: tokenSymbolKey, value_low: tokenSymbolValue.value_low, value_high: tokenSymbolValue.value_high },
+                { scope: bridgeScope, key: collectionKey, value_low: collectionValue.value_low, value_high: collectionValue.value_high },
                 [{ actor: evmAccount.name, permission: "active" }]
             );
 
@@ -576,14 +486,6 @@ describe("NFT Bridge - Request Notify (NFT Request Fulfillment)", () => {
             receiverValue = stringToStorageValue(userAccount.name);
             await evmContract.action.setstate(
                 { scope: bridgeScope, key: receiverKey, value_low: receiverValue.value_low, value_high: receiverValue.value_high },
-                [{ actor: evmAccount.name, permission: "active" }]
-            );
-
-            // Property 7: evm_decimals
-            decimalsKey = (BigInt('0x' + requestsBaseSlot) + BigInt(7 + propertyCount * requestIndex)).toString(16).padStart(64, '0');
-            decimalsValue = uint256(0);
-            await evmContract.action.setstate(
-                { scope: bridgeScope, key: decimalsKey, value_low: decimalsValue.value_low, value_high: decimalsValue.value_high },
                 [{ actor: evmAccount.name, permission: "active" }]
             );
 
@@ -634,17 +536,6 @@ describe("NFT Bridge - Request Notify (NFT Request Fulfillment)", () => {
         });
 
         it("Should handle empty requests array gracefully", async () => {
-            function createStorageKey(slot) {
-                return slot.toString(16).padStart(64, '0');
-            }
-
-            function uint256(value) {
-                const bn = BigInt(value);
-                const mask128 = BigInt('0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF');
-                const low = (bn & mask128).toString();
-                const high = (bn >> BigInt(128)).toString();
-                return { value_low: low, value_high: high };
-            }
 
             // Set requests array length
             const requestsLengthKey = createStorageKey(STORAGE_BRIDGE_REQUEST_INDEX);

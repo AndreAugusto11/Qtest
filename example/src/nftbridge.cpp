@@ -333,55 +333,8 @@ namespace nft_bridge
         name collection_name = get_first_receiver();
         
         // Read from PairBridgeNFTRegister to get the EVM token address
-        account_state_table register_account_states(evm_account, conf.evm_register_scope);
-        auto register_account_states_bykey = register_account_states.get_index<"bykey"_n>();
-
-        // Get array slot to find PairNFT pairs[] array length
-        auto pair_storage_key = make_storage_key(evm_bridge::STORAGE_REGISTER_PAIR_INDEX);
-        auto pair_array_length_state = register_account_states_bykey.find(pair_storage_key);
-        check(pair_array_length_state != register_account_states_bykey.end(), "No NFT pairs found in EVM register");
-        
-        uint64_t pair_array_length = uint256_to_uint64(pair_array_length_state->value_low, pair_array_length_state->value_high);
-        check(pair_array_length > 0, "No NFT pairs registered");
-
-        auto pair_array_slot = keccak256(checksum_to_bytes(pair_storage_key));
-        const uint8_t pair_property_count = 8; // PairNFT struct has 8 properties
-
-        // Find the pair for this collection
-        vector<uint8_t> pair_evm_address_bs;
-        bool pair_found = false;
-
-        for (uint64_t i = 0; i < pair_array_length; i++) {
-            // Property 4: antelopeAccountName (collection name)
-            const auto account_name_key = add_to_key(pair_array_slot, 4 + (pair_property_count * i));
-            const auto account_name_state = register_account_states_bykey.find(account_name_key);
-            
-            if (account_name_state != register_account_states_bykey.end()) {
-                name stored_account = name{decode_short_string(account_name_state->value_low, account_name_state->value_high)};
-                
-                if (stored_account == collection_name) {
-                    // Property 0: active
-                    const auto pair_active_key = add_to_key(pair_array_slot, 0 + (pair_property_count * i));
-                    const auto pair_active = register_account_states_bykey.find(pair_active_key);
-                    check(pair_active != register_account_states_bykey.end() && 
-                          uint256_to_uint64(pair_active->value_low, pair_active->value_high) == 1, 
-                          "This NFT collection's pair is paused");
-                    
-                    // Property 2: evmAddress
-                    const auto pair_evm_address_key = add_to_key(pair_array_slot, 2 + (pair_property_count * i));
-                    const auto pair_evm_address_stored = register_account_states_bykey.find(pair_evm_address_key);
-                    check(pair_evm_address_stored != register_account_states_bykey.end(), "Unable to find Pair EVM Address");
-                    
-                    auto addr_bytes = uint256_to_bytes_internal(pair_evm_address_stored->value_low, pair_evm_address_stored->value_high);
-                    // Keep only the last 20 bytes for the address
-                    pair_evm_address_bs.assign(addr_bytes.begin() + 12, addr_bytes.end());
-                    pair_found = true;
-                    break;
-                }
-            }
-        }
-        
-        check(pair_found, "This NFT collection has no pair registered on this bridge");
+        vector<uint8_t> pair_evm_address_bs = get_collection_evm_address(collection_name);
+        check(pair_evm_address_bs.size() > 0, "This token has no pair registered on this bridge");
 
         // Prepare address for EVM Bridge call
         auto evm_contract = conf.evm_bridge_address.extract_as_byte_array();
@@ -500,7 +453,7 @@ namespace nft_bridge
         const auto base_slot = keccak256(checksum_to_bytes(length_key));
 
         for (uint64_t i = 0; i < length; ++i) {
-            const auto element_base = add_to_key(base_slot, i * 8);
+            const auto element_base = add_to_key(base_slot, i * 6);
 
             uint128_t value_low = 0;
             uint128_t value_high = 0;
@@ -510,8 +463,7 @@ namespace nft_bridge
             std::string sender;
             std::string receiver;
             std::string collection;
-            std::string token_symbol;
-            uint8_t evm_decimals = 0;
+            uint64_t requested_at = 0;
 
             // Property 0: call_id
             if (read_evm_state(bridge_scope, add_to_key(element_base, 0), value_low, value_high)) {
@@ -528,24 +480,20 @@ namespace nft_bridge
                 asset_id = uint256_to_uint64(value_low, value_high);
             }
 
-            // Property 3: collection (Antelope NFT collection account)
+            // Property 3: requested_at (timestamp)
             if (read_evm_state(bridge_scope, add_to_key(element_base, 3), value_low, value_high)) {
-                collection = decode_short_string(value_low, value_high);
+                requested_at = uint256_to_uint64(value_low, value_high);
             }
+            (void)requested_at;
 
-            // Property 4: token_symbol (reserved, not used for NFTs)
+            // Property 4: collection (Antelope NFT collection account)
             if (read_evm_state(bridge_scope, add_to_key(element_base, 4), value_low, value_high)) {
-                token_symbol = decode_short_string(value_low, value_high);
+                collection = decode_short_string(value_low, value_high);
             }
 
             // Property 5: receiver (Antelope account that gets the NFT)
             if (read_evm_state(bridge_scope, add_to_key(element_base, 5), value_low, value_high)) {
                 receiver = decode_short_string(value_low, value_high);
-            }
-
-            // Property 7: evm_decimals (reserved, not used for NFTs)
-            if (read_evm_state(bridge_scope, add_to_key(element_base, 7), value_low, value_high)) {
-                evm_decimals = static_cast<uint8_t>(uint256_to_uint64(value_low, value_high));
             }
 
             // Transfer NFT to receiver
@@ -665,7 +613,7 @@ namespace nft_bridge
 
             uint64_t refund_id = 0;
             uint64_t asset_id = 0;
-            std::string owner;
+            std::string receiver;
             std::string collection;
 
             if (read_evm_state(bridge_scope, add_to_key(element_base, 0), value_low, value_high)) {
@@ -677,14 +625,14 @@ namespace nft_bridge
             }
 
             if (read_evm_state(bridge_scope, add_to_key(element_base, 2), value_low, value_high)) {
-                owner = decode_short_string(value_low, value_high);
-            }
-
-            if (read_evm_state(bridge_scope, add_to_key(element_base, 3), value_low, value_high)) {
                 collection = decode_short_string(value_low, value_high);
             }
 
-            if (refund_id == 0 || asset_id == 0 || owner.empty() || collection.empty()) {
+            if (read_evm_state(bridge_scope, add_to_key(element_base, 3), value_low, value_high)) {
+                receiver = decode_short_string(value_low, value_high);
+            }
+
+            if (refund_id == 0 || asset_id == 0 || receiver.empty() || collection.empty()) {
                 continue;
             }
 
@@ -697,7 +645,7 @@ namespace nft_bridge
                 permission_level{get_self(), "active"_n},
                 name{collection},
                 "transfer"_n,
-                std::make_tuple(get_self(), name{owner}, vector<uint64_t>{asset_id}, std::string("Bridge refund"))
+                std::make_tuple(get_self(), name{receiver}, vector<uint64_t>{asset_id}, std::string("Bridge refund"))
             ).send();
 
             // Call EVM bridge contract to confirm refund was processed successfully
@@ -761,12 +709,12 @@ namespace nft_bridge
                 row.id = refunds.available_primary_key();
                 row.refund_id = refund_id;
                 row.asset_id = asset_id;
-                row.owner = owner;
+                row.owner = receiver;
                 row.collection = collection;
                 row.created_at = time_point_sec(current_time_point());
             });
 
-            print("Refund:", refund_id, " asset_id=", asset_id, " owner=", owner, " collection=", collection, "; ");
+            print("Refund:", refund_id, " asset_id=", asset_id, " owner=", receiver, " collection=", collection, "; ");
         }
     }
 
@@ -783,8 +731,51 @@ namespace nft_bridge
     }
 
     vector<uint8_t> nftbridge::get_collection_evm_address(name collection_name) {
-        // TODO: Read from EVM registry storage
-        // Return 20-byte EVM address
-        return vector<uint8_t>(20, 0); // Placeholder
+        auto conf = config_bridge.get();
+
+        account_state_table register_account_states(evm_account, conf.evm_register_scope);
+        auto register_account_states_bykey = register_account_states.get_index<"bykey"_n>();
+
+        // Get array slot to find PairNFT pairs[] array length
+        auto pair_storage_key = make_storage_key(evm_bridge::STORAGE_REGISTER_PAIR_INDEX);
+        auto pair_array_length_state = register_account_states_bykey.find(pair_storage_key);
+        check(pair_array_length_state != register_account_states_bykey.end(), "No NFT pairs found in EVM register");
+
+        uint64_t pair_array_length = uint256_to_uint64(pair_array_length_state->value_low, pair_array_length_state->value_high);
+        check(pair_array_length > 0, "No NFT pairs registered");
+
+        auto pair_array_slot = keccak256(checksum_to_bytes(pair_storage_key));
+        const uint8_t pair_property_count = 7; // PairNFT struct has 7 properties
+
+        // Find the pair for this collection
+        for (uint64_t i = 0; i < pair_array_length; i++) {
+            // Property 3: collectionName
+            const auto collection_name_key = add_to_key(pair_array_slot, 3 + (pair_property_count * i));
+            const auto collection_name_state = register_account_states_bykey.find(collection_name_key);
+
+            if (collection_name_state != register_account_states_bykey.end()) {
+                name stored_collection = name{decode_short_string(collection_name_state->value_low, collection_name_state->value_high)};
+
+                if (stored_collection == collection_name) {
+                    // Property 0: active
+                    const auto pair_active_key = add_to_key(pair_array_slot, 0 + (pair_property_count * i));
+                    const auto pair_active = register_account_states_bykey.find(pair_active_key);
+                    check(pair_active != register_account_states_bykey.end() &&
+                          uint256_to_uint64(pair_active->value_low, pair_active->value_high) == 1,
+                          "This NFT collection's pair is paused");
+
+                    // Property 2: evmAddress
+                    const auto pair_evm_address_key = add_to_key(pair_array_slot, 2 + (pair_property_count * i));
+                    const auto pair_evm_address_stored = register_account_states_bykey.find(pair_evm_address_key);
+                    check(pair_evm_address_stored != register_account_states_bykey.end(), "Unable to find Pair EVM Address");
+
+                    auto addr_bytes = uint256_to_bytes_internal(pair_evm_address_stored->value_low, pair_evm_address_stored->value_high);
+                    // Keep only the last 20 bytes for the address
+                    return vector<uint8_t>(addr_bytes.begin() + 12, addr_bytes.end());
+                }
+            }
+        }
+
+        return {};
     }
 }
