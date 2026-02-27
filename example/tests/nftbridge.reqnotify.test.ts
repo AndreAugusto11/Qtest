@@ -364,15 +364,301 @@ describe("NFT Bridge - Request Notify (NFT Request Fulfillment)", () => {
             expect(assetsTable.rows.length).toBe(1);
             expect(assetsTable.rows[0].owner).toBe(receiverAccount.name);
 
+            // Verify EVM requests array is empty after processing
+            const evmStatesTable = await chain.rpc.get_table_rows({
+                json: true,
+                code: evmAccount.name,
+                scope: bridgeScope,
+                table: "accountstate",
+                lower_bound: requestsLengthKey,
+                upper_bound: requestsLengthKey,
+                key_type: 'sha256',
+                index_position: 2
+            });
+
+            // The requests array length should be 0 after processing
+            expect(evmStatesTable.rows.length).toBe(1);
+            expect(evmStatesTable.rows[0].value_low).toBe("0");
+            expect(evmStatesTable.rows[0].value_high).toBe("0");
+
             console.log("✓ NFT request processed and transferred successfully");
+            console.log("✓ EVM requests list cleared after processing");
         });
 
         it("Should process multiple NFT requests", async () => {
-            // TODO
+            function createStorageKey(slot) {
+                return slot.toString(16).padStart(64, '0');
+            }
+
+            function uint256(value) {
+                const bn = BigInt(value);
+                const mask128 = BigInt('0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF');
+                const low = (bn & mask128).toString();
+                const high = (bn >> BigInt(128)).toString();
+                return { value_low: low, value_high: high };
+            }
+
+            function stringToStorageValue(str) {
+                const hex = Buffer.from(str).toString('hex');
+                const length = str.length * 2;
+                const paddedHex = hex.padEnd(62, '0') + length.toString(16).padStart(2, '0');
+                const low = BigInt('0x' + paddedHex.slice(32));
+                const high = BigInt('0x' + paddedHex.slice(0, 32));
+                return { value_low: low.toString(), value_high: high.toString() };
+            }
+
+            function addressToUint256(address) {
+                const cleanAddr = address.slice(2).toLowerCase();
+                const paddedHex = cleanAddr.padStart(64, '0');
+                const low = BigInt('0x' + paddedHex.slice(32));
+                const high = BigInt('0x' + paddedHex.slice(0, 32));
+                return { value_low: low.toString(), value_high: high.toString() };
+            }
+
+            function keccak256ArraySlot(slot) {
+                const slotHex = slot.toString(16).padStart(64, '0');
+                const hash = keccak256(Buffer.from(slotHex, 'hex'));
+                return hash.padStart(64, '0');
+            }
+
+            // Mint second NFT (asset_id 101)
+            await atomicContract.action.mint(
+                {
+                    to: bridgeAccount.name,
+                    asset_id: 101,
+                    collection: collectionAccount.name,
+                    schema: "nftschema",
+                    immutable_data: [{ key: "name", value: "Request Fulfill NFT #101" }],
+                    mutable_data: []
+                },
+                [{ actor: collectionAccount.name, permission: "active" }]
+            );
+            // Mint NFT 100 again to bridge (was transferred in previous test)
+            await atomicContract.action.mint(
+                {
+                    to: bridgeAccount.name,
+                    asset_id: 102,  // Use 102 since 100 was already used
+                    collection: collectionAccount.name,
+                    schema: "nftschema",
+                    immutable_data: [{ key: "name", value: "Request Fulfill NFT #102" }],
+                    mutable_data: []
+                },
+                [{ actor: collectionAccount.name, permission: "active" }]
+            );
+            // Set requests array length to 2 (slot 5)
+            const requestsLengthKey = createStorageKey(5);
+            const requestsLength = uint256(2);
+
+            await evmContract.action.setstate(
+                {
+                    scope: bridgeScope,
+                    key: requestsLengthKey,
+                    value_low: requestsLength.value_low,
+                    value_high: requestsLength.value_high
+                },
+                [{ actor: evmAccount.name, permission: "active" }]
+            );
+
+            // Calculate base slot for requests array
+            const requestsBaseSlot = keccak256ArraySlot(5);
+            const propertyCount = 8;
+
+            // === Request 0: NFT 102 to bob ===
+            let requestIndex = 0;
+
+            // Property 0: call_id = 2001
+            let callIdKey = (BigInt('0x' + requestsBaseSlot) + BigInt(0 + propertyCount * requestIndex)).toString(16).padStart(64, '0');
+            let callIdValue = uint256(2001);
+            await evmContract.action.setstate(
+                { scope: bridgeScope, key: callIdKey, value_low: callIdValue.value_low, value_high: callIdValue.value_high },
+                [{ actor: evmAccount.name, permission: "active" }]
+            );
+
+            // Property 1: sender
+            let senderKey = (BigInt('0x' + requestsBaseSlot) + BigInt(1 + propertyCount * requestIndex)).toString(16).padStart(64, '0');
+            let senderValue = addressToUint256("0x0123456789abcdef0123456789abcdef01234567");
+            await evmContract.action.setstate(
+                { scope: bridgeScope, key: senderKey, value_low: senderValue.value_low, value_high: senderValue.value_high },
+                [{ actor: evmAccount.name, permission: "active" }]
+            );
+
+            // Property 2: asset_id = 102
+            let assetIdKey = (BigInt('0x' + requestsBaseSlot) + BigInt(2 + propertyCount * requestIndex)).toString(16).padStart(64, '0');
+            let assetIdValue = uint256(102);
+            await evmContract.action.setstate(
+                { scope: bridgeScope, key: assetIdKey, value_low: assetIdValue.value_low, value_high: assetIdValue.value_high },
+                [{ actor: evmAccount.name, permission: "active" }]
+            );
+
+            // Property 3: collection
+            let collectionKey = (BigInt('0x' + requestsBaseSlot) + BigInt(3 + propertyCount * requestIndex)).toString(16).padStart(64, '0');
+            let collectionValue = stringToStorageValue("mycollect");
+            await evmContract.action.setstate(
+                { scope: bridgeScope, key: collectionKey, value_low: collectionValue.value_low, value_high: collectionValue.value_high },
+                [{ actor: evmAccount.name, permission: "active" }]
+            );
+
+            // Property 4: token_symbol
+            let tokenSymbolKey = (BigInt('0x' + requestsBaseSlot) + BigInt(4 + propertyCount * requestIndex)).toString(16).padStart(64, '0');
+            let tokenSymbolValue = stringToStorageValue("NFT");
+            await evmContract.action.setstate(
+                { scope: bridgeScope, key: tokenSymbolKey, value_low: tokenSymbolValue.value_low, value_high: tokenSymbolValue.value_high },
+                [{ actor: evmAccount.name, permission: "active" }]
+            );
+
+            // Property 5: receiver = bob
+            let receiverKey = (BigInt('0x' + requestsBaseSlot) + BigInt(5 + propertyCount * requestIndex)).toString(16).padStart(64, '0');
+            let receiverValue = stringToStorageValue(receiverAccount.name);
+            await evmContract.action.setstate(
+                { scope: bridgeScope, key: receiverKey, value_low: receiverValue.value_low, value_high: receiverValue.value_high },
+                [{ actor: evmAccount.name, permission: "active" }]
+            );
+
+            // Property 7: evm_decimals
+            let decimalsKey = (BigInt('0x' + requestsBaseSlot) + BigInt(7 + propertyCount * requestIndex)).toString(16).padStart(64, '0');
+            let decimalsValue = uint256(0);
+            await evmContract.action.setstate(
+                { scope: bridgeScope, key: decimalsKey, value_low: decimalsValue.value_low, value_high: decimalsValue.value_high },
+                [{ actor: evmAccount.name, permission: "active" }]
+            );
+
+            // === Request 1: NFT 101 to alice ===
+            requestIndex = 1;
+
+            // Property 0: call_id = 2002
+            callIdKey = (BigInt('0x' + requestsBaseSlot) + BigInt(0 + propertyCount * requestIndex)).toString(16).padStart(64, '0');
+            callIdValue = uint256(2002);
+            await evmContract.action.setstate(
+                { scope: bridgeScope, key: callIdKey, value_low: callIdValue.value_low, value_high: callIdValue.value_high },
+                [{ actor: evmAccount.name, permission: "active" }]
+            );
+
+            // Property 1: sender
+            senderKey = (BigInt('0x' + requestsBaseSlot) + BigInt(1 + propertyCount * requestIndex)).toString(16).padStart(64, '0');
+            senderValue = addressToUint256("0xabcdef0123456789abcdef0123456789abcdef01");
+            await evmContract.action.setstate(
+                { scope: bridgeScope, key: senderKey, value_low: senderValue.value_low, value_high: senderValue.value_high },
+                [{ actor: evmAccount.name, permission: "active" }]
+            );
+
+            // Property 2: asset_id = 101
+            assetIdKey = (BigInt('0x' + requestsBaseSlot) + BigInt(2 + propertyCount * requestIndex)).toString(16).padStart(64, '0');
+            assetIdValue = uint256(101);
+            await evmContract.action.setstate(
+                { scope: bridgeScope, key: assetIdKey, value_low: assetIdValue.value_low, value_high: assetIdValue.value_high },
+                [{ actor: evmAccount.name, permission: "active" }]
+            );
+
+            // Property 3: collection
+            collectionKey = (BigInt('0x' + requestsBaseSlot) + BigInt(3 + propertyCount * requestIndex)).toString(16).padStart(64, '0');
+            collectionValue = stringToStorageValue("mycollect");
+            await evmContract.action.setstate(
+                { scope: bridgeScope, key: collectionKey, value_low: collectionValue.value_low, value_high: collectionValue.value_high },
+                [{ actor: evmAccount.name, permission: "active" }]
+            );
+
+            // Property 4: token_symbol
+            tokenSymbolKey = (BigInt('0x' + requestsBaseSlot) + BigInt(4 + propertyCount * requestIndex)).toString(16).padStart(64, '0');
+            tokenSymbolValue = stringToStorageValue("NFT");
+            await evmContract.action.setstate(
+                { scope: bridgeScope, key: tokenSymbolKey, value_low: tokenSymbolValue.value_low, value_high: tokenSymbolValue.value_high },
+                [{ actor: evmAccount.name, permission: "active" }]
+            );
+
+            // Property 5: receiver = alice
+            receiverKey = (BigInt('0x' + requestsBaseSlot) + BigInt(5 + propertyCount * requestIndex)).toString(16).padStart(64, '0');
+            receiverValue = stringToStorageValue(userAccount.name);
+            await evmContract.action.setstate(
+                { scope: bridgeScope, key: receiverKey, value_low: receiverValue.value_low, value_high: receiverValue.value_high },
+                [{ actor: evmAccount.name, permission: "active" }]
+            );
+
+            // Property 7: evm_decimals
+            decimalsKey = (BigInt('0x' + requestsBaseSlot) + BigInt(7 + propertyCount * requestIndex)).toString(16).padStart(64, '0');
+            decimalsValue = uint256(0);
+            await evmContract.action.setstate(
+                { scope: bridgeScope, key: decimalsKey, value_low: decimalsValue.value_low, value_high: decimalsValue.value_high },
+                [{ actor: evmAccount.name, permission: "active" }]
+            );
+
+            // Call reqnotify to process both requests
+            const result = await bridgeContract.action.reqnotify({}, [{ actor: bridgeAccount.name, permission: "active" }]);
+            expect(result.processed.block_num).toBeGreaterThan(0);
+
+            // Verify NFT 102 was transferred to bob
+            const asset102 = await chain.rpc.get_table_rows({
+                json: true,
+                code: collectionAccount.name,
+                scope: collectionAccount.name,
+                table: "assets",
+                lower_bound: 102,
+                upper_bound: 102
+            });
+            expect(asset102.rows.length).toBe(1);
+            expect(asset102.rows[0].owner).toBe(receiverAccount.name);
+
+            // Verify NFT 101 was transferred to alice
+            const asset101 = await chain.rpc.get_table_rows({
+                json: true,
+                code: collectionAccount.name,
+                scope: collectionAccount.name,
+                table: "assets",
+                lower_bound: 101,
+                upper_bound: 101
+            });
+            expect(asset101.rows.length).toBe(1);
+            expect(asset101.rows[0].owner).toBe(userAccount.name);
+
+            // Verify EVM requests array is empty
+            const evmStatesTable = await chain.rpc.get_table_rows({
+                json: true,
+                code: evmAccount.name,
+                scope: bridgeScope,
+                table: "accountstate",
+                lower_bound: requestsLengthKey,
+                upper_bound: requestsLengthKey,
+                key_type: 'sha256',
+                index_position: 2
+            });
+            expect(evmStatesTable.rows.length).toBe(1);
+            expect(evmStatesTable.rows[0].value_low).toBe("0");
+            expect(evmStatesTable.rows[0].value_high).toBe("0");
+
+            console.log("✓ Multiple NFT requests processed successfully");
         });
 
-        it("Should reject duplicate NFT request by call_id", async () => {
-            // TODO
+        it("Should handle empty requests array gracefully", async () => {
+            function createStorageKey(slot) {
+                return slot.toString(16).padStart(64, '0');
+            }
+
+            function uint256(value) {
+                const bn = BigInt(value);
+                const mask128 = BigInt('0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF');
+                const low = (bn & mask128).toString();
+                const high = (bn >> BigInt(128)).toString();
+                return { value_low: low, value_high: high };
+            }
+
+            // Set requests array length to 0 (already cleared from previous tests)
+            const requestsLengthKey = createStorageKey(5);
+            const requestsLength = uint256(0);
+
+            await evmContract.action.setstate(
+                {
+                    scope: bridgeScope,
+                    key: requestsLengthKey,
+                    value_low: requestsLength.value_low,
+                    value_high: requestsLength.value_high
+                },
+                [{ actor: evmAccount.name, permission: "active" }]
+            );
+
+            // Call reqnotify - should do nothing gracefully
+            const result = await bridgeContract.action.reqnotify({}, [{ actor: bridgeAccount.name, permission: "active" }]);
+            expect(result.processed.block_num).toBeGreaterThan(0);
+
+            console.log("✓ Empty requests array handled gracefully");
         });
     });
 });

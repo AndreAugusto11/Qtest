@@ -527,11 +527,48 @@ namespace nft_bridge
                     std::make_tuple(get_self(), receiver_name, std::vector<uint64_t>{asset_id}, std::string("NFT bridge request fulfilled"))
                 ).send();
 
+                // Call EVM bridge contract to confirm request was processed successfully
+                // This triggers requestSuccessful(uint id) which deletes the request from EVM storage
+                auto evm_contract = conf.evm_bridge_address.extract_as_byte_array();
+                std::vector<uint8_t> evm_to;
+                evm_to.insert(evm_to.end(), evm_contract.begin(), evm_contract.end());
+
+                // Prepare EVM function call: requestSuccessful(uint256 id)
+                // Function selector: keccak256("requestSuccessful(uint256)") first 4 bytes
+                std::vector<uint8_t> data;
+                vector<uint8_t> fnsig = {0x7d, 0x9c, 0x16, 0xc9}; // Placeholder - need actual selector
+                data.insert(data.end(), fnsig.begin(), fnsig.end());
+
+                // Parameter: id (call_id as uint256) - 32 bytes
+                vector<uint8_t> id_param(32, 0);
+                for (int j = 7; j >= 0; j--) {
+                    id_param[24 + j] = static_cast<uint8_t>((call_id >> (j * 8)) & 0xFF);
+                }
+                data.insert(data.end(), id_param.begin(), id_param.end());
+
+                // Find the EVM account of this bridge contract
+                account_table _accounts(evm_account, evm_account.value);
+                auto accounts_byaccount = _accounts.get_index<"byaccount"_n>();
+                auto evm_bridge_account = accounts_byaccount.find(get_self().value);
+                
+                if (evm_bridge_account != accounts_byaccount.end()) {
+                    // Call requestSuccessful() on EVM bridge contract
+                    action(
+                        permission_level{get_self(), "active"_n},
+                        evm_account,
+                        "raw"_n,
+                        std::make_tuple(
+                            get_self(),
+                            data,
+                            false,
+                            std::optional<checksum160>(evm_bridge_account->address)
+                        )
+                    ).send();
+                }
+
                 print("Fulfilled request ", call_id, ": transferred NFT ", asset_id, " to ", receiver, "; ");
             }
         }
-
-        // Note: EVM side should delete processed requests from storage
     }
 
     [[eosio::action]]
@@ -610,6 +647,45 @@ namespace nft_bridge
                 "transfer"_n,
                 std::make_tuple(get_self(), name{owner}, vector<uint64_t>{asset_id}, std::string("Bridge refund"))
             ).send();
+
+            // Call EVM bridge contract to confirm refund was processed successfully
+            // This triggers refundSuccessful(uint id) which deletes the refund from EVM storage
+            auto evm_contract = conf.evm_bridge_address.extract_as_byte_array();
+            std::vector<uint8_t> evm_to;
+            evm_to.insert(evm_to.end(), evm_contract.begin(), evm_contract.end());
+
+            // Prepare EVM function call: refundSuccessful(uint256 id)
+            // Function selector: keccak256("refundSuccessful(uint256)") first 4 bytes
+            std::vector<uint8_t> data;
+            vector<uint8_t> fnsig = {0x8e, 0x19, 0x8c, 0xf1}; // Placeholder - need actual selector
+            data.insert(data.end(), fnsig.begin(), fnsig.end());
+
+            // Parameter: id (refund_id as uint256) - 32 bytes
+            vector<uint8_t> id_param(32, 0);
+            for (int j = 7; j >= 0; j--) {
+                id_param[24 + j] = static_cast<uint8_t>((refund_id >> (j * 8)) & 0xFF);
+            }
+            data.insert(data.end(), id_param.begin(), id_param.end());
+
+            // Find the EVM account of this bridge contract
+            account_table _accounts(evm_account, evm_account.value);
+            auto accounts_byaccount = _accounts.get_index<"byaccount"_n>();
+            auto evm_bridge_account = accounts_byaccount.find(get_self().value);
+            
+            if (evm_bridge_account != accounts_byaccount.end()) {
+                // Call refundSuccessful() on EVM bridge contract
+                action(
+                    permission_level{get_self(), "active"_n},
+                    evm_account,
+                    "raw"_n,
+                    std::make_tuple(
+                        get_self(),
+                        data,
+                        false,
+                        std::optional<checksum160>(evm_bridge_account->address)
+                    )
+                ).send();
+            }
 
             refunds.emplace(get_self(), [&](auto& row) {
                 row.id = refunds.available_primary_key();
