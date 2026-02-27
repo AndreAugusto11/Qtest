@@ -446,15 +446,9 @@ namespace nft_bridge
     [[eosio::action]]
     void nftbridge::reqnotify() {
         auto conf = config_bridge.get();
+        uint64_t bridge_scope = conf.evm_bridge_scope != 0 ? conf.evm_bridge_scope : 123;
 
-        // Clean old requests (optional retention)
-        requests_table requests(get_self(), get_self().value);
-        auto requests_by_timestamp = requests.get_index<"timestamp"_n>();
-        (void)requests_by_timestamp;
-
-        uint64_t bridge_scope = conf.evm_bridge_scope != 0 ? conf.evm_bridge_scope : 123; // Default for mock tests
-
-        // Read EVM storage for burn requests
+        // Read EVM storage for NFT unlock requests (slot 5)
         uint128_t length_low = 0;
         uint128_t length_high = 0;
         const auto length_key = make_storage_key(5);
@@ -478,43 +472,66 @@ namespace nft_bridge
             uint128_t value_high = 0;
 
             uint64_t call_id = 0;
-            uint64_t amount = 0;
-            uint8_t evm_decimals = 0;
+            uint64_t asset_id = 0;
             std::string sender;
             std::string receiver;
+            std::string collection;
+            std::string token_symbol;
+            uint8_t evm_decimals = 0;
 
+            // Property 0: call_id
             if (read_evm_state(bridge_scope, add_to_key(element_base, 0), value_low, value_high)) {
                 call_id = uint256_to_uint64(value_low, value_high);
             }
 
+            // Property 1: sender (EVM address)
             if (read_evm_state(bridge_scope, add_to_key(element_base, 1), value_low, value_high)) {
                 sender = decode_address(value_low, value_high);
             }
 
+            // Property 2: asset_id (NFT to transfer back)
             if (read_evm_state(bridge_scope, add_to_key(element_base, 2), value_low, value_high)) {
-                amount = uint256_to_uint64(value_low, value_high);
+                asset_id = uint256_to_uint64(value_low, value_high);
             }
 
-            if (read_evm_state(bridge_scope, add_to_key(element_base, 6), value_low, value_high)) {
+            // Property 3: collection (Antelope NFT collection account)
+            if (read_evm_state(bridge_scope, add_to_key(element_base, 3), value_low, value_high)) {
+                collection = decode_short_string(value_low, value_high);
+            }
+
+            // Property 4: token_symbol (reserved, not used for NFTs)
+            if (read_evm_state(bridge_scope, add_to_key(element_base, 4), value_low, value_high)) {
+                token_symbol = decode_short_string(value_low, value_high);
+            }
+
+            // Property 5: receiver (Antelope account that gets the NFT)
+            if (read_evm_state(bridge_scope, add_to_key(element_base, 5), value_low, value_high)) {
                 receiver = decode_short_string(value_low, value_high);
             }
 
+            // Property 7: evm_decimals (reserved, not used for NFTs)
             if (read_evm_state(bridge_scope, add_to_key(element_base, 7), value_low, value_high)) {
                 evm_decimals = static_cast<uint8_t>(uint256_to_uint64(value_low, value_high));
             }
 
-            requests.emplace(get_self(), [&](auto& row) {
-                row.id = requests.available_primary_key();
-                row.call_id = call_id;
-                row.sender = sender;
-                row.amount = amount;
-                row.receiver = receiver;
-                row.evm_decimals = evm_decimals;
-                row.created_at = time_point_sec(current_time_point());
-            });
+            // Transfer NFT to receiver
+            if (!collection.empty() && !receiver.empty() && asset_id > 0) {
+                name collection_name(collection);
+                name receiver_name(receiver);
 
-            print("Request:", call_id, " sender=", sender, " receiver=", receiver, " amount=", amount, " decimals=", evm_decimals, "; ");
+                // Call atomic assets contract to transfer NFT back to receiver
+                action(
+                    permission_level{get_self(), "active"_n},
+                    collection_name,
+                    "transfer"_n,
+                    std::make_tuple(get_self(), receiver_name, std::vector<uint64_t>{asset_id}, std::string("NFT bridge request fulfilled"))
+                ).send();
+
+                print("Fulfilled request ", call_id, ": transferred NFT ", asset_id, " to ", receiver, "; ");
+            }
         }
+
+        // Note: EVM side should delete processed requests from storage
     }
 
     [[eosio::action]]
@@ -523,7 +540,12 @@ namespace nft_bridge
 
         // Clean old refunds (optional retention)
         refunds_table refunds(get_self(), get_self().value);
-        (void)refunds;
+        auto refunds_by_timestamp = refunds.get_index<"timestamp"_n>();
+        auto upper = refunds_by_timestamp.upper_bound(current_time_point().sec_since_epoch() - 60);
+        uint64_t cleanup_count = 10;
+        for (auto itr = refunds_by_timestamp.begin(); cleanup_count > 0 && itr != upper; --cleanup_count) {
+            itr = refunds_by_timestamp.erase(itr);
+        }
 
         uint64_t bridge_scope = conf.evm_bridge_scope != 0 ? conf.evm_bridge_scope : 123; // Default for mock tests
 
@@ -544,8 +566,10 @@ namespace nft_bridge
 
         const auto base_slot = keccak256(checksum_to_bytes(length_key));
 
+        auto refunds_by_refundid = refunds.get_index<"refundid"_n>();
+
         for (uint64_t i = 0; i < length; ++i) {
-            const auto element_base = add_to_key(base_slot, i * 3);
+            const auto element_base = add_to_key(base_slot, i * 4);
 
             uint128_t value_low = 0;
             uint128_t value_high = 0;
@@ -553,6 +577,7 @@ namespace nft_bridge
             uint64_t refund_id = 0;
             uint64_t asset_id = 0;
             std::string owner;
+            std::string collection;
 
             if (read_evm_state(bridge_scope, add_to_key(element_base, 0), value_low, value_high)) {
                 refund_id = uint256_to_uint64(value_low, value_high);
@@ -566,15 +591,36 @@ namespace nft_bridge
                 owner = decode_short_string(value_low, value_high);
             }
 
+            if (read_evm_state(bridge_scope, add_to_key(element_base, 3), value_low, value_high)) {
+                collection = decode_short_string(value_low, value_high);
+            }
+
+            if (refund_id == 0 || asset_id == 0 || owner.empty() || collection.empty()) {
+                continue;
+            }
+
+            if (refunds_by_refundid.find(refund_id) != refunds_by_refundid.end()) {
+                continue;
+            }
+
+            // Transfer NFT back to owner
+            action(
+                permission_level{get_self(), "active"_n},
+                name{collection},
+                "transfer"_n,
+                std::make_tuple(get_self(), name{owner}, vector<uint64_t>{asset_id}, std::string("Bridge refund"))
+            ).send();
+
             refunds.emplace(get_self(), [&](auto& row) {
                 row.id = refunds.available_primary_key();
                 row.refund_id = refund_id;
                 row.asset_id = asset_id;
                 row.owner = owner;
+                row.collection = collection;
                 row.created_at = time_point_sec(current_time_point());
             });
 
-            print("Refund:", refund_id, " asset_id=", asset_id, " owner=", owner, "; ");
+            print("Refund:", refund_id, " asset_id=", asset_id, " owner=", owner, " collection=", collection, "; ");
         }
     }
 

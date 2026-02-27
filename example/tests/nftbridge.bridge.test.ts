@@ -364,4 +364,140 @@ describe("NFT Bridge - Bridge Function", () => {
             }
         });
     });
+
+    describe(":: Refund NFT from EVM", () => {
+        it("Should refund NFT back to owner", async () => {
+            // Mint and transfer NFT to bridge
+            await atomicContract.action.mint(
+                {
+                    to: userAccount.name,
+                    asset_id: 30,
+                    collection: atomicAccount.name,
+                    schema: "testschema",
+                    immutable_data: [{ key: "name", value: "Test NFT #30" }],
+                    mutable_data: []
+                },
+                [{ actor: atomicAccount.name, permission: "active" }]
+            );
+
+            await atomicContract.action.transfer(
+                {
+                    from: userAccount.name,
+                    to: bridgeAccount.name,
+                    asset_ids: [30],
+                    memo: evmRecipient
+                },
+                [{ actor: userAccount.name, permission: "active" }]
+            );
+
+            function createStorageKey(slot) {
+                return slot.toString(16).padStart(64, '0');
+            }
+
+            function uint256(value) {
+                const bn = BigInt(value);
+                const mask128 = BigInt('0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF');
+                const low = (bn & mask128).toString();
+                const high = (bn >> BigInt(128)).toString();
+                return { value_low: low, value_high: high };
+            }
+
+            function stringToStorageValue(str) {
+                const hex = Buffer.from(str).toString('hex');
+                const length = str.length * 2;
+                const paddedHex = hex.padEnd(62, '0') + length.toString(16).padStart(2, '0');
+                const low = BigInt('0x' + paddedHex.slice(32));
+                const high = BigInt('0x' + paddedHex.slice(0, 32));
+                return { value_low: low.toString(), value_high: high.toString() };
+            }
+
+            function keccak256ArraySlot(slot) {
+                const slotHex = slot.toString(16).padStart(64, '0');
+                const hash = keccak256(Buffer.from(slotHex, 'hex'));
+                return hash.padStart(64, '0');
+            }
+
+            // Refund array length (slot 6)
+            const refundsLengthKey = createStorageKey(6);
+            const refundsLength = uint256(1);
+            await evmContract.action.setstate(
+                {
+                    scope: bridgeScope,
+                    key: refundsLengthKey,
+                    value_low: refundsLength.value_low,
+                    value_high: refundsLength.value_high
+                },
+                [{ actor: evmAccount.name, permission: "active" }]
+            );
+
+            const refundsBaseSlot = keccak256ArraySlot(6);
+            const propertyCount = 4;
+            const refundIndex = 0;
+
+            const refundIdKey = (BigInt('0x' + refundsBaseSlot) + BigInt(0 + propertyCount * refundIndex)).toString(16).padStart(64, '0');
+            const refundIdValue = uint256(1001);
+            await evmContract.action.setstate(
+                { scope: bridgeScope, key: refundIdKey, value_low: refundIdValue.value_low, value_high: refundIdValue.value_high },
+                [{ actor: evmAccount.name, permission: "active" }]
+            );
+
+            const refundAssetKey = (BigInt('0x' + refundsBaseSlot) + BigInt(1 + propertyCount * refundIndex)).toString(16).padStart(64, '0');
+            const refundAssetValue = uint256(30);
+            await evmContract.action.setstate(
+                { scope: bridgeScope, key: refundAssetKey, value_low: refundAssetValue.value_low, value_high: refundAssetValue.value_high },
+                [{ actor: evmAccount.name, permission: "active" }]
+            );
+
+            const refundOwnerKey = (BigInt('0x' + refundsBaseSlot) + BigInt(2 + propertyCount * refundIndex)).toString(16).padStart(64, '0');
+            const refundOwnerValue = stringToStorageValue(userAccount.name);
+            await evmContract.action.setstate(
+                { scope: bridgeScope, key: refundOwnerKey, value_low: refundOwnerValue.value_low, value_high: refundOwnerValue.value_high },
+                [{ actor: evmAccount.name, permission: "active" }]
+            );
+
+            const refundCollectionKey = (BigInt('0x' + refundsBaseSlot) + BigInt(3 + propertyCount * refundIndex)).toString(16).padStart(64, '0');
+            const refundCollectionValue = stringToStorageValue(atomicAccount.name);
+            await evmContract.action.setstate(
+                { scope: bridgeScope, key: refundCollectionKey, value_low: refundCollectionValue.value_low, value_high: refundCollectionValue.value_high },
+                [{ actor: evmAccount.name, permission: "active" }]
+            );
+
+            const result = await bridgeContract.action.refundnotify({}, [{ actor: bridgeAccount.name, permission: "active" }]);
+            expect(result.processed.block_num).toBeGreaterThan(0);
+
+            const assetsTable = await chain.rpc.get_table_rows({
+                json: true,
+                code: atomicAccount.name,
+                scope: atomicAccount.name,
+                table: "assets",
+                lower_bound: 30,
+                upper_bound: 30
+            });
+
+            expect(assetsTable.rows[0].owner).toBe(userAccount.name);
+
+            const refundsTable = await chain.rpc.get_table_rows({
+                json: true,
+                code: bridgeAccount.name,
+                scope: bridgeAccount.name,
+                table: "refunds"
+            });
+
+            expect(refundsTable.rows.length).toBe(1);
+            expect(refundsTable.rows[0].refund_id).toBe(1001);
+            expect(refundsTable.rows[0].asset_id).toBe(30);
+            expect(refundsTable.rows[0].owner).toBe(userAccount.name);
+            expect(refundsTable.rows[0].collection).toBe(atomicAccount.name);
+
+            // Calling again should not duplicate or re-transfer
+            await bridgeContract.action.refundnotify({}, [{ actor: bridgeAccount.name, permission: "active" }]);
+            const refundsTableAfter = await chain.rpc.get_table_rows({
+                json: true,
+                code: bridgeAccount.name,
+                scope: bridgeAccount.name,
+                table: "refunds"
+            });
+            expect(refundsTableAfter.rows.length).toBe(1);
+        });
+    });
 });

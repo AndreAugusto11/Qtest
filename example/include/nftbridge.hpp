@@ -147,39 +147,23 @@ class [[eosio::contract("nftbridge")]] nftbridge : public eosio::contract {
 
     using errorlogs_table = multi_index<"errorlogs"_n, errorlog>;
 
-    struct [[eosio::table]] request_row {
-        uint64_t id;
-        uint64_t call_id;
-        string sender;
-        uint64_t amount;
-        string receiver;
-        uint8_t evm_decimals;
-        time_point_sec created_at;
-
-        uint64_t primary_key() const { return id; }
-        uint64_t by_timestamp() const { return created_at.sec_since_epoch(); }
-    };
-
-    using requests_table = multi_index<
-        "requests"_n,
-        request_row,
-        eosio::indexed_by<"timestamp"_n, eosio::const_mem_fun<request_row, uint64_t, &request_row::by_timestamp>>
-    >;
-
     struct [[eosio::table]] refund_row {
         uint64_t id;
         uint64_t refund_id;
         uint64_t asset_id;
         string owner;
+        string collection;
         time_point_sec created_at;
 
         uint64_t primary_key() const { return id; }
+        uint64_t by_refund_id() const { return refund_id; }
         uint64_t by_timestamp() const { return created_at.sec_since_epoch(); }
     };
 
     using refunds_table = multi_index<
         "refunds"_n,
         refund_row,
+        eosio::indexed_by<"refundid"_n, eosio::const_mem_fun<refund_row, uint64_t, &refund_row::by_refund_id>>,
         eosio::indexed_by<"timestamp"_n, eosio::const_mem_fun<refund_row, uint64_t, &refund_row::by_timestamp>>
     >;
 

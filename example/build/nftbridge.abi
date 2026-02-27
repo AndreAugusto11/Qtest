@@ -131,6 +131,10 @@
                     "type": "string"
                 },
                 {
+                    "name": "collection",
+                    "type": "string"
+                },
+                {
                     "name": "created_at",
                     "type": "time_point_sec"
                 }
@@ -145,40 +149,6 @@
             "name": "reqnotify",
             "base": "",
             "fields": []
-        },
-        {
-            "name": "request_row",
-            "base": "",
-            "fields": [
-                {
-                    "name": "id",
-                    "type": "uint64"
-                },
-                {
-                    "name": "call_id",
-                    "type": "uint64"
-                },
-                {
-                    "name": "sender",
-                    "type": "string"
-                },
-                {
-                    "name": "amount",
-                    "type": "uint64"
-                },
-                {
-                    "name": "receiver",
-                    "type": "string"
-                },
-                {
-                    "name": "evm_decimals",
-                    "type": "uint8"
-                },
-                {
-                    "name": "created_at",
-                    "type": "time_point_sec"
-                }
-            ]
         }
     ],
     "actions": [
@@ -226,13 +196,6 @@
         {
             "name": "refunds",
             "type": "refund_row",
-            "index_type": "i64",
-            "key_names": [],
-            "key_types": []
-        },
-        {
-            "name": "requests",
-            "type": "request_row",
             "index_type": "i64",
             "key_names": [],
             "key_types": []
