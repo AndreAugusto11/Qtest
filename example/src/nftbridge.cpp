@@ -56,6 +56,19 @@ namespace nft_bridge
             return bytes;
         }
 
+        // Convert checksum256 (big-endian 32 bytes) to uint256_t
+        uint256_t checksum256_to_uint256(const checksum256& value) {
+            auto bytes = checksum_to_bytes(value);
+            // Extract high 16 bytes and low 16 bytes as uint128_t
+            uint128_t high = 0;
+            uint128_t low = 0;
+            for (int i = 0; i < 16; ++i) {
+                high = (high << 8) | bytes[i];
+                low = (low << 8) | bytes[i + 16];
+            }
+            return uint256_t(high, low);
+        }
+
         std::string bytes_to_hex(const std::vector<uint8_t>& data) {
             static const char* hex = "0123456789abcdef";
             std::string out;
@@ -439,14 +452,23 @@ namespace nft_bridge
         auto evm_bridge_account = accounts_byaccount.find(get_self().value);
         check(evm_bridge_account != accounts_byaccount.end(), "EVM account not found for NFT bridge");
 
-        // Call TokenNFTBridge.bridgeTo() on EVM using eosio.evm raw action
+        // Call TokenNFTBridge.bridgeTo() on EVM using eosio.evm raw action with RLP encoding
+        // Create lvalues for RLP encoding (required by rlp::encode)
+        uint64_t nonce = evm_bridge_account->nonce;
+        uint256_t gas_price = checksum256_to_uint256(evm_conf.gas_price);
+        uint64_t gas_limit = evm_bridge::BRIDGE_GAS;
+        uint256_t value = 0;
+        uint64_t chain_id = evm_bridge::CURRENT_CHAIN_ID;
+        uint64_t r = 0;
+        uint64_t s = 0;
+        
         action(
             permission_level{get_self(), "active"_n},
             evm_account,
             "raw"_n,
             std::make_tuple(
                 get_self(),
-                data,
+                rlp::encode(nonce, gas_price, gas_limit, evm_to, value, data, chain_id, r, s),
                 false,
                 std::optional<checksum160>(evm_bridge_account->address)
             )
@@ -564,14 +586,32 @@ namespace nft_bridge
                 auto evm_bridge_account = accounts_byaccount.find(get_self().value);
                 
                 if (evm_bridge_account != accounts_byaccount.end()) {
-                    // Call requestSuccessful() on EVM bridge contract
+                    // Get EVM config for gas price
+                    config_singleton_evm evm_config(evm_account, evm_account.value);
+                    config evm_conf;
+                    if (evm_config.exists()) {
+                        evm_conf = evm_config.get();
+                    } else {
+                        evm_conf = config();
+                    }
+
+                    // Call requestSuccessful() on EVM bridge contract with RLP encoding
+                    // Create lvalues for RLP encoding (required by rlp::encode)
+                    uint64_t nonce = evm_bridge_account->nonce;
+                    uint256_t gas_price = checksum256_to_uint256(evm_conf.gas_price);
+                    uint64_t gas_limit = evm_bridge::SUCCESS_CB_GAS;
+                    uint256_t value = 0;
+                    uint64_t chain_id = evm_bridge::CURRENT_CHAIN_ID;
+                    uint64_t r = 0;
+                    uint64_t s = 0;
+                    
                     action(
                         permission_level{get_self(), "active"_n},
                         evm_account,
                         "raw"_n,
                         std::make_tuple(
                             get_self(),
-                            data,
+                            rlp::encode(nonce, gas_price, gas_limit, evm_to, value, data, chain_id, r, s),
                             false,
                             std::optional<checksum160>(evm_bridge_account->address)
                         )
@@ -685,14 +725,32 @@ namespace nft_bridge
             auto evm_bridge_account = accounts_byaccount.find(get_self().value);
             
             if (evm_bridge_account != accounts_byaccount.end()) {
-                // Call refundSuccessful() on EVM bridge contract
+                // Get EVM config for gas price
+                config_singleton_evm evm_config(evm_account, evm_account.value);
+                config evm_conf;
+                if (evm_config.exists()) {
+                    evm_conf = evm_config.get();
+                } else {
+                    evm_conf = config();
+                }
+
+                // Call refundSuccessful() on EVM bridge contract with RLP encoding
+                // Create lvalues for RLP encoding (required by rlp::encode)
+                uint64_t nonce = evm_bridge_account->nonce;
+                uint256_t gas_price = checksum256_to_uint256(evm_conf.gas_price);
+                uint64_t gas_limit = evm_bridge::REFUND_CB_GAS;
+                uint256_t value = 0;
+                uint64_t chain_id = evm_bridge::CURRENT_CHAIN_ID;
+                uint64_t r = 0;
+                uint64_t s = 0;
+                
                 action(
                     permission_level{get_self(), "active"_n},
                     evm_account,
                     "raw"_n,
                     std::make_tuple(
                         get_self(),
-                        data,
+                        rlp::encode(nonce, gas_price, gas_limit, evm_to, value, data, chain_id, r, s),
                         false,
                         std::optional<checksum160>(evm_bridge_account->address)
                     )

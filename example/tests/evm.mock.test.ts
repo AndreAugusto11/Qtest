@@ -131,6 +131,144 @@ describe("Bridge EVM Storage Reading", () => {
             expect(stateTable.rows.length).toBe(5); // length + 4 properties
         });
     });
+
+    describe(":: RLP Decoding", () => {
+        it("Should extract data field from RLP-encoded transaction", async () => {
+            // Create an account to use as caller
+            const caller = await chain.system.createAccount("caller");
+            
+            // Set up an account in the accounts table
+            await evmContract.action.setaccount({
+                index: 1,
+                address: "0742d35Cc6634C0532925a3b844Bc9e7595f0bEb",
+                account: caller.name
+            }, [{ actor: evmAccount.name, permission: "active" }]);
+
+            // Test 1: Simple non-RLP data (backward compatibility)
+            const simpleData = Buffer.from("7d056de7000000000000000000000000742d35cc6634c0532925a3b844bc9e7595f0beb", "hex");
+            await evmContract.action.raw({
+                caller: caller.name,
+                tx: Array.from(simpleData),
+                estimate: false,
+                sender: null
+            }, [{ actor: caller.name, permission: "active" }]);
+
+            let lastcall = await chain.rpc.get_table_rows({
+                json: true,
+                code: evmAccount.name,
+                scope: evmAccount.name,
+                table: "lastcall"
+            });
+
+            expect(lastcall.rows.length).toBe(1);
+            expect(lastcall.rows[0].tx_prefix).toBe("7d056de7");
+            expect(lastcall.rows[0].caller).toBe(caller.name);
+            console.log("✓ Non-RLP data handled correctly");
+
+            // Test 2: RLP-encoded transaction
+            // This simulates what nftbridge sends: [nonce, gasPrice, gasLimit, to, value, data, chainId, r, s]
+            // For testing, we'll encode a simple transaction with data = "7d056de7..." (bridgeTo function call)
+            const rlp = require('rlp');
+            
+            const nonce = 5;
+            const gasPrice = Buffer.from("0000000000000000000000000000000000000000000000000000000000000001", "hex");
+            const gasLimit = 250000;
+            const to = Buffer.from("0742d35Cc6634C0532925a3b844Bc9e7595f0bEb", "hex");
+            const value = 0;
+            const data = Buffer.from("7d056de7000000000000000000000000742d35cc6634c0532925a3b844bc9e7595f0beb000000000000000000000000000000000000000000000000000000000000007b", "hex");
+            const chainId = 41;
+            const r = 0;
+            const s = 0;
+
+            const rlpEncoded = rlp.encode([nonce, gasPrice, gasLimit, to, value, data, chainId, r, s]);
+
+            await evmContract.action.raw({
+                caller: caller.name,
+                tx: Array.from(rlpEncoded),
+                estimate: false,
+                sender: "0742d35Cc6634C0532925a3b844Bc9e7595f0bEb"
+            }, [{ actor: caller.name, permission: "active" }]);
+
+            lastcall = await chain.rpc.get_table_rows({
+                json: true,
+                code: evmAccount.name,
+                scope: evmAccount.name,
+                table: "lastcall"
+            });
+
+            expect(lastcall.rows.length).toBe(1);
+            expect(lastcall.rows[0].tx_prefix).toBe("7d056de7"); // Should extract data field correctly
+            expect(lastcall.rows[0].tx_size).toBeGreaterThan(100); // RLP encoded size
+            console.log("✓ RLP-encoded transaction decoded correctly");
+            console.log("  - tx_size:", lastcall.rows[0].tx_size, "bytes");
+            console.log("  - tx_prefix:", lastcall.rows[0].tx_prefix);
+        });
+
+        it("Should handle RLP-encoded callbacks (requestSuccessful)", async () => {
+            // Create a bridge account
+            const bridgeAccount = await chain.system.createAccount("nftbridge");
+            
+            // Set up the bridge account in accounts table
+            await evmContract.action.setaccount({
+                index: 2,
+                address: "0842d35Cc6634C0532925a3b844Bc9e7595f0bEc",
+                account: bridgeAccount.name
+            }, [{ actor: evmAccount.name, permission: "active" }]);
+
+            // Set up a request in storage (simulate a pending request)
+            const bridgeScope = 2;
+            const lengthKey = createStorageKey(5); // requests.length at slot 5
+            await evmContract.action.setstate({
+                scope: bridgeScope,
+                key: lengthKey,
+                value_low: "1",
+                value_high: "0"
+            }, [{ actor: evmAccount.name, permission: "active" }]);
+
+            // Create RLP-encoded requestSuccessful(uint256) call
+            // Function selector: 7d9c16c9
+            const rlp = require('rlp');
+            
+            const callId = 123;
+            const dataHex = "7d9c16c9" + callId.toString(16).padStart(64, '0'); // requestSuccessful(123)
+            const data = Buffer.from(dataHex, "hex");
+            
+            const rlpEncoded = rlp.encode([
+                0, // nonce
+                Buffer.from("0000000000000000000000000000000000000000000000000000000000000001", "hex"), // gasPrice
+                250000, // gasLimit
+                Buffer.from("0842d35Cc6634C0532925a3b844Bc9e7595f0bEc", "hex"), // to
+                0, // value
+                data, // requestSuccessful call data
+                41, // chainId
+                0, // r
+                0  // s
+            ]);
+
+            // Send RLP-encoded transaction
+            await evmContract.action.raw({
+                caller: bridgeAccount.name,
+                tx: Array.from(rlpEncoded),
+                estimate: false,
+                sender: "0842d35Cc6634C0532925a3b844Bc9e7595f0bEc"
+            }, [{ actor: bridgeAccount.name, permission: "active" }]);
+
+            // Verify requests array was cleared
+            const stateTable = await chain.rpc.get_table_rows({
+                json: true,
+                code: evmAccount.name,
+                scope: bridgeScope,
+                table: "accountstate"
+            });
+
+            const lengthRow = stateTable.rows.find(r => r.key === lengthKey);
+            expect(lengthRow).toBeDefined();
+            expect(lengthRow.value_low).toBe("0"); // Should be cleared
+            expect(lengthRow.value_high).toBe("0");
+            
+            console.log("✓ RLP-encoded requestSuccessful() handled correctly");
+        });
+    });
 });
 
 // Helper functions

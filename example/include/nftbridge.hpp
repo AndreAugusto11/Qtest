@@ -10,6 +10,10 @@
 #include <vector>
 #include <array>
 
+// External dependencies for EVM integration
+#include <intx/base.hpp>
+#include <rlp/rlp.hpp>
+
 namespace nft_bridge {
 
 using eosio::checksum160;

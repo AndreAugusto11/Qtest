@@ -5,4 +5,11 @@ clean:
 
 build: clean
 	-mkdir -p ./build
-	eosio-cpp ./src/eosio.token.cpp -o build/eosio.token.wasm  -I ./include/ -abigen_output build/eosio.token.abi
+	@set -e; \
+	for src in $$(find ./src -name "*.cpp" ! -name "bridge.cpp"); do \
+		rel="$${src#./src/}"; \
+		mkdir -p "./build/$$(dirname "$${rel}")"; \
+		output=$$(cdt-cpp "$$src" -o "./build/$$(basename "$$src" .cpp).wasm" -I ./include/ -I ./external/ -DCHAIN_ID=41 -abigen_output "./build/$$(basename "$$src" .cpp).abi" 2>&1); \
+		echo "$$output"; \
+		echo "$$output" | grep -Eq "(^|[[:space:]])error:" && exit 1 || true; \
+	done

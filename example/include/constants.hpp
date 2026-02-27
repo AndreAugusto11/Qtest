@@ -47,8 +47,7 @@ namespace evm_bridge
   };
 
   static constexpr auto WORD_SIZE       = 32u;
-  // CURRENT_CHAIN_ID expects CHAIN_ID to be defined by build script
-  // static constexpr size_t CURRENT_CHAIN_ID = CHAIN_ID_MACRO; // auto from build script
+  static constexpr size_t CURRENT_CHAIN_ID = CHAIN_ID_MACRO; // auto from build script
   static constexpr eosio::name EVM_SYSTEM_CONTRACT = eosio::name("eosio.evm"); // DON'T CHANGE, this is the eosio.evm contract name
   static constexpr auto EVM_SUCCESS_CALLBACK_SIGNATURE = "0fbc79cd"; // Dont understand these?
   static constexpr auto EVM_REFUND_CALLBACK_SIGNATURE = "dc2fdf9f"; // check 'function.signatures.js' 

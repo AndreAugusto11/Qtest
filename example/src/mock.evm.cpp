@@ -1,5 +1,7 @@
 #include <mock.evm.hpp>
 #include "../include/constants.hpp"
+#include <intx/base.hpp>
+#include <rlp/rlp.hpp>
 #include <array>
 
 namespace {
@@ -99,16 +101,99 @@ void mockevm::setaccount(uint64_t index, checksum160 address, name account) {
     }
 }
 
+// Decode RLP transaction to extract the data field (simplified)
+// RLP format: [nonce, gasPrice, gasLimit, to, value, data, chainId, 0, 0]
+// For mock purposes, we just need to extract the data field at index 5
+std::vector<uint8_t> extract_data_from_rlp(const std::vector<uint8_t>& tx) {
+    // Check if this looks like RLP (first byte indicates list)
+    if (tx.empty() || tx[0] < 0xc0) {
+        // Not RLP-encoded, return as-is (simple data format)
+        return tx;
+    }
+    
+    // For RLP list, skip the list prefix and parse items
+    // This is a simplified parser that assumes standard transaction format
+    size_t pos = 0;
+    
+    // Skip list prefix
+    if (tx[0] >= 0xf8) {
+        // Long list (length > 55 bytes)
+        size_t len_of_len = tx[0] - 0xf7;
+        pos = 1 + len_of_len;
+    } else if (tx[0] >= 0xc0) {
+        // Short list
+        pos = 1;
+    }
+    
+    // Skip first 5 fields (nonce, gasPrice, gasLimit, to, value)
+    for (int i = 0; i < 5 && pos < tx.size(); i++) {
+        uint8_t byte = tx[pos];
+        if (byte < 0x80) {
+            // Single byte
+            pos++;
+        } else if (byte < 0xb8) {
+            // Short string
+            size_t len = byte - 0x80;
+            pos += 1 + len;
+        } else if (byte < 0xc0) {
+            // Long string
+            size_t len_of_len = byte - 0xb7;
+            size_t len = 0;
+            for (size_t j = 0; j < len_of_len && pos + 1 + j < tx.size(); j++) {
+                len = (len << 8) | tx[pos + 1 + j];
+            }
+            pos += 1 + len_of_len + len;
+        } else {
+            // Unexpected list, return original
+            return tx;
+        }
+    }
+    
+    // Extract data field (6th element, index 5)
+    if (pos >= tx.size()) {
+        return tx; // Not enough data
+    }
+    
+    uint8_t data_byte = tx[pos];
+    if (data_byte < 0x80) {
+        // Single byte data
+        return std::vector<uint8_t>{data_byte};
+    } else if (data_byte < 0xb8) {
+        // Short string data
+        size_t len = data_byte - 0x80;
+        if (pos + 1 + len <= tx.size()) {
+            return std::vector<uint8_t>(tx.begin() + pos + 1, tx.begin() + pos + 1 + len);
+        }
+    } else if (data_byte < 0xc0) {
+        // Long string data
+        size_t len_of_len = data_byte - 0xb7;
+        size_t len = 0;
+        for (size_t j = 0; j < len_of_len && pos + 1 + j < tx.size(); j++) {
+            len = (len << 8) | tx[pos + 1 + j];
+        }
+        if (pos + 1 + len_of_len + len <= tx.size()) {
+            return std::vector<uint8_t>(tx.begin() + pos + 1 + len_of_len, tx.begin() + pos + 1 + len_of_len + len);
+        }
+    }
+    
+    // If we can't parse, return original
+    return tx;
+}
+
 [[eosio::action]]
 void mockevm::raw(name caller, std::vector<uint8_t> tx, bool estimate, std::optional<checksum160> sender) {
     require_auth(caller);
+    
+    // Decode RLP transaction to extract data field
+    std::vector<uint8_t> data = extract_data_from_rlp(tx);
+    
     static const char* hex = "0123456789abcdef";
     std::string prefix;
-    const size_t prefix_len = std::min<size_t>(4, tx.size());
+    const size_t prefix_len = std::min<size_t>(4, data.size());
     prefix.reserve(prefix_len * 2);
     for (size_t i = 0; i < prefix_len; ++i) {
-        prefix.push_back(hex[(tx[i] >> 4) & 0x0F]);
-        prefix.push_back(hex[tx[i] & 0x0F]);
+        prefix.push_back(hex[(data[i] >> 4) & 0x0F]);
+        prefix.push_back(hex[data[i] & 0x0F]);
     }
     lastcall_singleton last(get_self(), get_self().value);
     last.set(lastcall{
@@ -119,15 +204,15 @@ void mockevm::raw(name caller, std::vector<uint8_t> tx, bool estimate, std::opti
         .tx_prefix = prefix
     }, get_self());
 
-    // Parse function selector and handle callbacks
-    if (tx.size() >= 4) {
+    // Parse function selector and handle callbacks (using decoded data)
+    if (data.size() >= 4) {
         // Check for requestSuccessful(uint256) - use constant from constants.hpp
         // Function selector from EVM_REQUEST_SUCCESSFUL_SIGNATURE
-        if (tx[0] == 0x7d && tx[1] == 0x9c && tx[2] == 0x16 && tx[3] == 0xc9 && tx.size() >= 36) {
+        if (data[0] == 0x7d && data[1] == 0x9c && data[2] == 0x16 && data[3] == 0xc9 && data.size() >= 36) {
             // Extract call_id from parameters (bytes 4-35)
             uint64_t call_id = 0;
             for (int i = 0; i < 8; ++i) {
-                call_id = (call_id << 8) | tx[28 + i];
+                call_id = (call_id << 8) | data[28 + i];
             }
             
             // Delete request from storage by setting requests.length = 0
@@ -161,11 +246,11 @@ void mockevm::raw(name caller, std::vector<uint8_t> tx, bool estimate, std::opti
         }
         // Check for refundSuccessful(uint256) - use constant from constants.hpp
         // Function selector from EVM_REFUND_SUCCESSFUL_SIGNATURE
-        else if (tx[0] == 0x8e && tx[1] == 0x19 && tx[2] == 0x8c && tx[3] == 0xf1 && tx.size() >= 36) {
+        else if (data[0] == 0x8e && data[1] == 0x19 && data[2] == 0x8c && data[3] == 0xf1 && data.size() >= 36) {
             // Extract refund_id from parameters (bytes 4-35)
             uint64_t refund_id = 0;
             for (int i = 0; i < 8; ++i) {
-                refund_id = (refund_id << 8) | tx[28 + i];
+                refund_id = (refund_id << 8) | data[28 + i];
             }
             
             // Delete refund from storage by setting refunds.length = 0
